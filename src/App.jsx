@@ -9,6 +9,17 @@ import {
   PRODUCTS,
   logo,
 } from './data/appData';
+import ProductsView from './components/ProductsView';
+import {
+  buildProductOptionLabel,
+  formatCurrency as formatProductCurrency,
+  getActiveOffer,
+  getCurrentPrice,
+  mergeProductList,
+  normalizeProducts,
+  updateProductOffer,
+} from './lib/catalog';
+import SalesWorkspace from './components/SalesView';
 import { readJSON, readString, removeItem, writeJSON, writeString } from './lib/storage';
 
 const STORAGE_KEYS = {
@@ -16,6 +27,7 @@ const STORAGE_KEYS = {
   auth: 'thorena.authenticated',
   orders: 'thorena.orders',
   activeView: 'thorena.active-view',
+  products: 'thorena.products',
 };
 
 const EMPTY_FORM = {
@@ -24,11 +36,6 @@ const EMPTY_FORM = {
   customerNumber: '',
   deliveryAddress: '',
   observations: '',
-};
-
-const EMPTY_DRAFT = {
-  productId: PRODUCTS[0].id,
-  quantity: 1,
 };
 
 const currencyFormatter = new Intl.NumberFormat('es-CL', {
@@ -74,6 +81,8 @@ function normalizeItems(items) {
       const quantity = Math.max(1, Number(item?.quantity) || 1);
       const unitPrice = Math.max(0, Number(item?.unitPrice) || 0);
       const productName = String(item?.productName || '').trim();
+      const basePrice = Math.max(0, Number(item?.basePrice ?? unitPrice) || unitPrice);
+      const discountPercent = Math.max(0, Number(item?.discountPercent) || 0);
 
       if (!productName || !Number.isFinite(unitPrice)) {
         return null;
@@ -83,6 +92,8 @@ function normalizeItems(items) {
         productId: String(item?.productId || productName),
         productName,
         unitPrice,
+        basePrice,
+        discountPercent,
         quantity,
         subtotal: unitPrice * quantity,
       };
@@ -119,6 +130,20 @@ function loadOrders() {
   return Array.isArray(stored) ? stored.map(normalizeOrder) : [];
 }
 
+function loadProducts() {
+  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.products, PRODUCTS);
+  return normalizeProducts(Array.isArray(stored) ? stored : PRODUCTS);
+}
+
+function createInitialDraft(products) {
+  const availableProduct = products.find((product) => product.stock > 0) || products[0] || null;
+
+  return {
+    productId: availableProduct?.id || '',
+    quantity: 1,
+  };
+}
+
 function formatOrderCode(number) {
   return `PED-${String(number).padStart(4, '0')}`;
 }
@@ -145,8 +170,8 @@ function getCustomerContact(order) {
   return order.customerNumber || order.contactPhone || '-';
 }
 
-function getProductById(productId) {
-  return PRODUCTS.find((product) => product.id === productId) || PRODUCTS[0];
+function getProductById(productId, catalog = PRODUCTS) {
+  return catalog.find((product) => product.id === productId) || null;
 }
 
 function LoginScreen({ onLogin }) {
@@ -248,6 +273,14 @@ function Header({ activeView, onChangeView, onLogout, resolvedTheme, onToggleThe
           aria-current={activeView === 'pedidos' ? 'page' : undefined}
         >
           Pedidos
+        </button>
+        <button
+          type="button"
+          className={activeView === 'productos' ? 'nav-button is-active' : 'nav-button'}
+          onClick={() => onChangeView('productos')}
+          aria-current={activeView === 'productos' ? 'page' : undefined}
+        >
+          Productos
         </button>
       </nav>
 
@@ -837,6 +870,7 @@ function App() {
       : 'ventas',
   );
   const [orders, setOrders] = useState(() => loadOrders());
+  const [products, setProducts] = useState(() => loadProducts());
 
   useLayoutEffect(() => {
     const nextResolvedTheme = getResolvedTheme(themeMode);
@@ -883,6 +917,10 @@ function App() {
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.orders, orders);
   }, [orders]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.products, products);
+  }, [products]);
 
   useEffect(() => {
     if (authenticated) {
@@ -934,9 +972,11 @@ function App() {
 
       <main className="app-main">
         {activeView === 'ventas' ? (
-          <SalesView orders={orders} setOrders={setOrders} />
-        ) : (
+          <SalesWorkspace products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} />
+        ) : activeView === 'pedidos' ? (
           <OrdersView orders={orders} setOrders={setOrders} />
+        ) : (
+          <ProductsView products={products} setProducts={setProducts} />
         )}
       </main>
     </div>

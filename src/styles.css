@@ -427,6 +427,115 @@ textarea:focus {
   gap: 8px;
 }
 
+.products-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.products-forms-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.products-form {
+  display: grid;
+  gap: 18px;
+}
+
+.products-import {
+  display: grid;
+  gap: 14px;
+}
+
+.file-dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 54px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  border: 1px dashed color-mix(in srgb, var(--brand) 30%, var(--line) 70%);
+  background: color-mix(in srgb, var(--brand-soft) 26%, var(--surface-strong) 74%);
+  color: var(--brand-strong);
+  font-weight: 800;
+  cursor: pointer;
+  text-align: center;
+}
+
+.file-dropzone input {
+  display: none;
+}
+
+.products-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.product-card {
+  display: grid;
+  gap: 14px;
+  border-radius: 24px;
+  padding: 18px;
+}
+
+.product-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.product-price-stack {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.strike-price {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.offer-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.offer-chip-active {
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+  border-color: color-mix(in srgb, var(--brand) 26%, var(--line) 74%);
+}
+
+.product-meta {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.item-name-stack {
+  display: grid;
+  gap: 6px;
+}
+
+.empty-products {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  min-height: 320px;
+}
+
 .sales-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.12fr) minmax(320px, 0.88fr);
@@ -502,7 +611,8 @@ textarea:focus {
 }
 
 .empty-state,
-.empty-orders {
+.empty-orders,
+.empty-products {
   display: grid;
   place-items: center;
   text-align: center;
@@ -761,6 +871,14 @@ textarea:focus {
   .sales-layout {
     grid-template-columns: 1fr;
   }
+
+  .products-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .products-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
@@ -806,6 +924,10 @@ textarea:focus {
 
   .check-item {
     align-items: flex-start;
+  }
+
+  .product-card-head {
+    flex-direction: column;
   }
 }
 

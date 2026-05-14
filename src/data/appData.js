@@ -9,10 +9,38 @@ export const LOGIN_CREDENTIALS = {
 };
 
 export const PRODUCTS = [
-  { id: 'item-1', name: 'Item 1', price: 1990 },
-  { id: 'item-2', name: 'Item 2', price: 3490 },
-  { id: 'item-3', name: 'Item 3', price: 5990 },
-  { id: 'item-4', name: 'Item 4', price: 9990 },
+  {
+    id: 'item-1',
+    name: 'Item 1',
+    category: 'General',
+    stock: 50,
+    basePrice: 1990,
+    offer: { mode: 'none', discountPercent: 0, endDate: '' },
+  },
+  {
+    id: 'item-2',
+    name: 'Item 2',
+    category: 'General',
+    stock: 40,
+    basePrice: 3490,
+    offer: { mode: 'none', discountPercent: 0, endDate: '' },
+  },
+  {
+    id: 'item-3',
+    name: 'Item 3',
+    category: 'General',
+    stock: 30,
+    basePrice: 5990,
+    offer: { mode: 'none', discountPercent: 0, endDate: '' },
+  },
+  {
+    id: 'item-4',
+    name: 'Item 4',
+    category: 'General',
+    stock: 20,
+    basePrice: 9990,
+    offer: { mode: 'none', discountPercent: 0, endDate: '' },
+  },
 ];
 
 export const CHECKLIST_ITEMS = [
