@@ -107,6 +107,23 @@ export function mergeProductList(currentProducts, incomingRaw) {
   return updated;
 }
 
+export function addProductStock(currentProducts, productId, amount) {
+  const stockAmount = normalizeInt(amount, 0);
+
+  if (stockAmount <= 0) {
+    return currentProducts;
+  }
+
+  return currentProducts.map((product) =>
+    product.id === productId
+      ? {
+          ...product,
+          stock: product.stock + stockAmount,
+        }
+      : product,
+  );
+}
+
 export function updateProductOffer(currentProducts, productId, rawOffer) {
   return currentProducts.map((product) =>
     product.id === productId

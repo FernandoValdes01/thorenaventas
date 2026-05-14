@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  addProductStock,
   buildProductOptionLabel,
   formatCurrency,
   formatOfferSummary,
@@ -24,9 +25,15 @@ const INITIAL_OFFER_FORM = {
   endDate: '',
 };
 
+const INITIAL_STOCK_FORM = {
+  productId: '',
+  amount: '',
+};
+
 function ProductsView({ products, setProducts }) {
   const [productForm, setProductForm] = useState(INITIAL_PRODUCT_FORM);
   const [offerForm, setOfferForm] = useState(INITIAL_OFFER_FORM);
+  const [stockForm, setStockForm] = useState(INITIAL_STOCK_FORM);
   const [feedback, setFeedback] = useState(null);
   const [importing, setImporting] = useState(false);
 
@@ -40,6 +47,12 @@ function ProductsView({ products, setProducts }) {
         ? current
         : { ...current, productId: products[0].id },
     );
+
+    setStockForm((current) =>
+      current.productId && products.some((product) => product.id === current.productId)
+        ? current
+        : { ...current, productId: products[0].id },
+    );
   }, [products]);
 
   const handleProductChange = (key) => (event) => {
@@ -49,6 +62,11 @@ function ProductsView({ products, setProducts }) {
 
   const handleOfferChange = (key) => (event) => {
     setOfferForm((current) => ({ ...current, [key]: event.target.value }));
+    setFeedback(null);
+  };
+
+  const handleStockChange = (key) => (event) => {
+    setStockForm((current) => ({ ...current, [key]: event.target.value }));
     setFeedback(null);
   };
 
@@ -147,6 +165,31 @@ function ProductsView({ products, setProducts }) {
     setFeedback({ type: 'success', text: 'Oferta guardada correctamente.' });
   };
 
+  const handleRemoveOffer = (productId) => {
+    setProducts((current) => updateProductOffer(current, productId, { mode: 'none', discountPercent: 0 }));
+    setFeedback({ type: 'success', text: 'Oferta eliminada correctamente.' });
+  };
+
+  const handleStockSubmit = (event) => {
+    event.preventDefault();
+
+    if (!stockForm.productId) {
+      setFeedback({ type: 'error', text: 'Selecciona un producto para recargar stock.' });
+      return;
+    }
+
+    const amount = Number(stockForm.amount);
+
+    if (!Number.isInteger(amount) || amount <= 0) {
+      setFeedback({ type: 'error', text: 'Ingresa una cantidad válida mayor que 0.' });
+      return;
+    }
+
+    setProducts((current) => addProductStock(current, stockForm.productId, amount));
+    setFeedback({ type: 'success', text: 'Stock recargado correctamente.' });
+    setStockForm((current) => ({ ...current, amount: '' }));
+  };
+
   return (
     <section className="screen">
       <div className="screen-heading">
@@ -223,9 +266,9 @@ function ProductsView({ products, setProducts }) {
               <span>{importing ? 'Procesando archivo...' : 'Seleccionar archivo Excel'}</span>
             </label>
           </div>
+        </div>
 
-          <div className="panel-divider" />
-
+        <div className="panel products-offers-panel">
           <form className="products-form" onSubmit={handleOfferSubmit}>
             <div className="panel-title">
               <h3>Crear oferta</h3>
@@ -280,52 +323,110 @@ function ProductsView({ products, setProducts }) {
             </button>
           </form>
         </div>
+      </div>
 
-        <div className="products-grid">
-          {products.length === 0 ? (
-            <div className="panel empty-products">
-              <h3>No hay productos cargados</h3>
-              <p className="muted">Agrega uno manualmente o importa un Excel.</p>
-            </div>
-          ) : (
-            products.map((product) => {
-              const activeOffer = getActiveOffer(product);
-              const currentPrice = getCurrentPrice(product);
+      <div className="panel stock-panel">
+        <form className="products-form" onSubmit={handleStockSubmit}>
+          <div className="panel-title">
+            <h3>Recargar stock</h3>
+            <p className="muted">Suma unidades a un producto ya ingresado.</p>
+          </div>
 
-              return (
-                <article className="panel product-card" key={product.id}>
-                  <div className="product-card-head">
-                    <div>
-                      <p className="eyebrow">{product.category}</p>
-                      <h3>{product.name}</h3>
-                    </div>
+          <div className="form-grid">
+            <label className="field field-wide">
+              <span>Producto</span>
+              <select value={stockForm.productId} onChange={handleStockChange('productId')}>
+                <option value="">Selecciona un producto</option>
+                {products.map((product) => (
+                  <option key={product.id} value={product.id}>
+                    {product.name} · {product.stock} en stock
+                  </option>
+                ))}
+              </select>
+            </label>
 
-                    <span className={product.stock > 0 ? 'badge badge-success' : 'badge badge-warning'}>
-                      {product.stock > 0 ? `${product.stock} en stock` : 'Sin stock'}
-                    </span>
+            <label className="field field-wide">
+              <span>Cantidad a recargar</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                inputMode="numeric"
+                value={stockForm.amount}
+                onChange={handleStockChange('amount')}
+              />
+            </label>
+          </div>
+
+          <button className="button button-secondary" type="submit">
+            Recargar stock
+          </button>
+        </form>
+      </div>
+
+      <div className="section-heading products-list-heading">
+        <p className="eyebrow">Productos</p>
+        <h3>Listado de items</h3>
+        <p className="muted">Productos cargados, oferta y stock actual.</p>
+      </div>
+
+      <div className="products-grid">
+        {products.length === 0 ? (
+          <div className="panel empty-products">
+            <h3>No hay productos cargados</h3>
+            <p className="muted">Agrega uno manualmente o importa un Excel.</p>
+          </div>
+        ) : (
+          products.map((product) => {
+            const activeOffer = getActiveOffer(product);
+            const hasStoredOffer = product.offer?.mode !== 'none' && Number(product.offer?.discountPercent) > 0;
+            const currentPrice = getCurrentPrice(product);
+
+            return (
+              <article className="panel product-card" key={product.id}>
+                <div className="product-card-head">
+                  <div>
+                    <p className="eyebrow">{product.category}</p>
+                    <h3>{product.name}</h3>
                   </div>
 
-                  <div className="product-price-stack">
-                    {activeOffer ? (
-                      <>
-                        <span className="strike-price">{formatCurrency(product.basePrice)}</span>
-                        <strong>{formatCurrency(currentPrice)}</strong>
-                      </>
-                    ) : (
+                  <span className={product.stock > 0 ? 'badge badge-success' : 'badge badge-warning'}>
+                    {product.stock > 0 ? `${product.stock} en stock` : 'Sin stock'}
+                  </span>
+                </div>
+
+                <div className="product-price-stack">
+                  {activeOffer ? (
+                    <>
+                      <span className="strike-price">{formatCurrency(product.basePrice)}</span>
                       <strong>{formatCurrency(currentPrice)}</strong>
-                    )}
+                    </>
+                  ) : (
+                    <strong>{formatCurrency(currentPrice)}</strong>
+                  )}
 
-                    <span className={activeOffer ? 'offer-chip offer-chip-active' : 'offer-chip'}>
-                      {activeOffer ? `${activeOffer.discountPercent}% descuento` : 'Sin oferta'}
-                    </span>
+                  <span className={activeOffer ? 'offer-chip offer-chip-active' : 'offer-chip'}>
+                    {activeOffer ? `${activeOffer.discountPercent}% descuento` : 'Sin oferta'}
+                  </span>
+                </div>
+
+                <p className="product-meta">{formatOfferSummary(product)}</p>
+
+                {hasStoredOffer ? (
+                  <div className="product-actions">
+                    <button
+                      className="button button-secondary button-small"
+                      type="button"
+                      onClick={() => handleRemoveOffer(product.id)}
+                    >
+                      Eliminar oferta
+                    </button>
                   </div>
-
-                  <p className="product-meta">{formatOfferSummary(product)}</p>
-                </article>
-              );
-            })
-          )}
-        </div>
+                ) : null}
+              </article>
+            );
+          })
+        )}
       </div>
     </section>
   );
