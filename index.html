@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#d96a00" />
+    <script>
+      (function () {
+        try {
+          var themeMode = localStorage.getItem('thorena.theme-mode') || 'system';
+          var resolved =
+            themeMode === 'system'
+              ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+              : themeMode;
+
+          document.documentElement.dataset.theme = resolved;
+          document.documentElement.style.colorScheme = resolved;
+        } catch (error) {}
+      })();
+    </script>
+    <meta
+      name="description"
+      content="Thorena Comercial: MVP interno de ventas para generar pedidos en terreno."
+    />
+    <title>Thorena Comercial | Ventas</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
