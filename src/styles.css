@@ -906,9 +906,21 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .products-grid {
-    grid-template-columns: 1fr;
-  }
+.products-grid {
+  grid-template-columns: 1fr;
+}
+
+.erp-content-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 16px;
+}
+
+.erp-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
 }
 
 @media (max-width: 760px) {
@@ -959,6 +971,11 @@ textarea:focus {
   .product-card-head {
     flex-direction: column;
   }
+
+  .erp-grid,
+  .erp-content-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 480px) {
@@ -973,4 +990,29 @@ textarea:focus {
   .brand-mark {
     width: 72px;
   }
+}
+
+.erp-tabs {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0 16px;
+  flex-wrap: wrap;
+}
+
+.erp-stat {
+  border-radius: 18px;
+  padding: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.erp-stat strong {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.erp-form,
+.erp-list-panel {
+  border-radius: 24px;
+  padding: 18px;
 }

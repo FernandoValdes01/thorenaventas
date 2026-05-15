@@ -10,6 +10,7 @@ import {
   logo,
 } from './data/appData';
 import ProductsView from './components/ProductsView';
+import ERPView from './components/ERPView';
 import {
   buildProductOptionLabel,
   formatCurrency as formatProductCurrency,
@@ -28,6 +29,8 @@ const STORAGE_KEYS = {
   orders: 'thorena.orders',
   activeView: 'thorena.active-view',
   products: 'thorena.products',
+  clients: 'thorena.clients',
+  spaces: 'thorena.spaces',
 };
 
 const EMPTY_FORM = {
@@ -133,6 +136,45 @@ function loadOrders() {
 function loadProducts() {
   const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.products, PRODUCTS);
   return normalizeProducts(Array.isArray(stored) ? stored : PRODUCTS);
+}
+
+function loadClients() {
+  const fallback = [
+    {
+      id: 'cli-base-1',
+      name: 'Ferreteria Los Coihues',
+      type: 'Mayorista',
+      rut: '76.123.456-7',
+      phone: '+56 9 4123 1111',
+      email: 'compras@coihues.cl',
+      address: 'Anibal Pinto 245, Villarrica',
+      observations: 'Pago habitual a 30 dias.',
+      debt: 280000,
+    },
+  ];
+  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.clients, fallback);
+  return Array.isArray(stored) ? stored : fallback;
+}
+
+function loadSpaces() {
+  const fallback = [
+    {
+      id: 'esp-base-1',
+      name: 'Bodega Central',
+      manager: 'Jefe de Bodega',
+      status: 'Disponible',
+      notes: 'Zona principal de preparacion de pedidos.',
+    },
+    {
+      id: 'esp-base-2',
+      name: 'Sala de Ventas',
+      manager: 'Encargado Comercial',
+      status: 'Ocupado',
+      notes: 'Atencion presencial de clientes minoristas.',
+    },
+  ];
+  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.spaces, fallback);
+  return Array.isArray(stored) ? stored : fallback;
 }
 
 function createInitialDraft(products) {
@@ -281,6 +323,14 @@ function Header({ activeView, onChangeView, onLogout, resolvedTheme, onToggleThe
           aria-current={activeView === 'productos' ? 'page' : undefined}
         >
           Productos
+        </button>
+        <button
+          type="button"
+          className={activeView === 'erp' ? 'nav-button is-active' : 'nav-button'}
+          onClick={() => onChangeView('erp')}
+          aria-current={activeView === 'erp' ? 'page' : undefined}
+        >
+          ERP
         </button>
       </nav>
 
@@ -871,6 +921,8 @@ function App() {
   );
   const [orders, setOrders] = useState(() => loadOrders());
   const [products, setProducts] = useState(() => loadProducts());
+  const [clients, setClients] = useState(() => loadClients());
+  const [spaces, setSpaces] = useState(() => loadSpaces());
 
   useLayoutEffect(() => {
     const nextResolvedTheme = getResolvedTheme(themeMode);
@@ -921,6 +973,14 @@ function App() {
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.products, products);
   }, [products]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.clients, clients);
+  }, [clients]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.spaces, spaces);
+  }, [spaces]);
 
   useEffect(() => {
     if (authenticated) {
@@ -975,6 +1035,8 @@ function App() {
           <SalesWorkspace products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} />
         ) : activeView === 'pedidos' ? (
           <OrdersView orders={orders} setOrders={setOrders} />
+        ) : activeView === 'erp' ? (
+          <ERPView clients={clients} setClients={setClients} spaces={spaces} setSpaces={setSpaces} orders={orders} />
         ) : (
           <ProductsView products={products} setProducts={setProducts} />
         )}
