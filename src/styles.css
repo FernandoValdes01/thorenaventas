@@ -587,6 +587,35 @@ textarea:focus {
   color: #1f6935;
 }
 
+.client-card {
+  display: grid;
+  gap: 14px;
+  border-radius: 22px;
+  padding: 16px;
+}
+
+.client-card .inventory-metrics strong {
+  font-size: 1rem;
+}
+
+.debt-chip-pending {
+  background: color-mix(in srgb, #ffe399 30%, white 70%);
+  border-color: color-mix(in srgb, #e1b73f 44%, var(--line) 56%);
+  color: #7c5700;
+}
+
+.debt-chip-overdue {
+  background: color-mix(in srgb, #f95f5f 18%, white 82%);
+  border-color: color-mix(in srgb, #e04545 42%, var(--line) 58%);
+  color: #8c1f1f;
+}
+
+.debt-chip-paid {
+  background: color-mix(in srgb, #a0e1b0 28%, white 72%);
+  border-color: color-mix(in srgb, #52b26a 42%, var(--line) 58%);
+  color: #1f6935;
+}
+
 .product-price-stack {
   display: flex;
   flex-wrap: wrap;

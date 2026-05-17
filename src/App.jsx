@@ -9,6 +9,8 @@ import {
   logo,
 } from './data/appData';
 import { ERP_CLIENTS, ERP_PAYMENT_METHODS, ERP_PRODUCTS } from './data/erpSeed';
+import { ERP_COBRANZAS } from './data/erpCobranzas';
+import { ERP_CLIENT_LAST_PURCHASE } from './data/erpClientLastPurchase';
 import ERP_VOLUME_SCALES from './data/erpScales.json';
 import ProductsView from './components/ProductsView';
 import ERPView from './components/ERPView';
@@ -32,6 +34,7 @@ const STORAGE_KEYS = {
   products: 'thorena.products',
   clients: 'thorena.clients',
   spaces: 'thorena.spaces',
+  cobranzas: 'thorena.cobranzas',
 };
 
 const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pagado', 'Pendiente', 'Anulado'];
@@ -77,6 +80,71 @@ function getInitialAuth() {
 function normalizeActiveView(view) {
   if (view === 'productos') return 'inventario';
   return view;
+}
+
+function normalizeNameKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .trim();
+}
+
+function excelSerialToISO(value) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return '';
+  }
+
+  const date = new Date((numeric - 25569) * 86400 * 1000);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+}
+
+function normalizeDateValue(value) {
+  if (!value) return '';
+
+  if (typeof value === 'number') {
+    return excelSerialToISO(value);
+  }
+
+  const normalized = String(value).trim();
+  if (!normalized) return '';
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeCobranzaStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+  if (status === 'vencido') return 'Vencido';
+  if (status === 'pagada' || status === 'pagado') return 'Pagada';
+  return 'Pendiente';
+}
+
+function normalizeCobranza(raw = {}, index = 0) {
+  const clientName = String(raw.clientName || raw.cliente || '').trim();
+  const amount = Math.max(0, Number(raw.amount ?? raw.monto) || 0);
+  const paidAmount = Math.max(0, Number(raw.paidAmount ?? raw.abono) || 0);
+  const balanceFromRaw = Number(raw.balance ?? raw.saldo);
+  const balance = Math.max(0, Number.isFinite(balanceFromRaw) ? balanceFromRaw : amount - paidAmount);
+
+  return {
+    id: String(raw.id || `cob-${index + 1}`),
+    clientName,
+    document: String(raw.document || raw.documento || '').trim(),
+    issueDate: normalizeDateValue(raw.issueDate ?? raw.fechaEmision),
+    dueDate: normalizeDateValue(raw.dueDate ?? raw.vencimiento),
+    amount,
+    paidAmount,
+    balance,
+    status: normalizeCobranzaStatus(raw.status ?? raw.estado),
+    notes: String(raw.notes ?? raw.observacion ?? '').trim(),
+  };
 }
 
 function normalizeChecklist(checklist) {
@@ -186,7 +254,20 @@ function loadProducts() {
 function loadClients() {
   const fallback = ERP_CLIENTS;
   const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.clients, fallback);
-  return Array.isArray(stored) ? stored : fallback;
+  const source = Array.isArray(stored) ? stored : fallback;
+
+  return source.map((client) => ({
+    ...client,
+    lastPurchase: normalizeDateValue(client.lastPurchase || ERP_CLIENT_LAST_PURCHASE[client.id] || ''),
+  }));
+}
+
+function loadCobranzas() {
+  const fallback = ERP_COBRANZAS;
+  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.cobranzas, fallback);
+  const source = Array.isArray(stored) ? stored : fallback;
+
+  return source.map((item, index) => normalizeCobranza(item, index)).filter((item) => item.clientName);
 }
 
 function loadSpaces() {
@@ -888,17 +969,182 @@ function OrdersView({ orders, setOrders }) {
   );
 }
 
-function ClientsView() {
+function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
+  const dateFormatter = useMemo(() => new Intl.DateTimeFormat('es-CL', { dateStyle: 'medium' }), []);
+
+  const latestOrderByClient = useMemo(() => {
+    const map = new Map();
+
+    orders.forEach((order) => {
+      const key = normalizeNameKey(order.customerName);
+      if (!key || !order.createdAt) return;
+
+      const parsed = new Date(order.createdAt);
+      if (Number.isNaN(parsed.getTime())) return;
+
+      const current = map.get(key);
+      if (!current || parsed > current) {
+        map.set(key, parsed);
+      }
+    });
+
+    return map;
+  }, [orders]);
+
+  const cobranzaByClient = useMemo(() => {
+    const map = new Map();
+
+    cobranzas.forEach((record) => {
+      const key = normalizeNameKey(record.clientName);
+      if (!key) return;
+
+      const current = map.get(key);
+      if (!current) {
+        map.set(key, record);
+        return;
+      }
+
+      const currentBalance = Number(current.balance) || 0;
+      const nextBalance = Number(record.balance) || 0;
+      if (nextBalance > currentBalance) {
+        map.set(key, record);
+        return;
+      }
+
+      const currentDue = current.dueDate ? new Date(current.dueDate).getTime() : 0;
+      const nextDue = record.dueDate ? new Date(record.dueDate).getTime() : 0;
+      if (nextDue > currentDue) {
+        map.set(key, record);
+      }
+    });
+
+    return map;
+  }, [cobranzas]);
+
+  const clientRows = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return clients
+      .map((client) => {
+        const key = normalizeNameKey(client.name);
+        const cobranza = cobranzaByClient.get(key) || null;
+        const balance = cobranza ? Math.max(0, Number(cobranza.balance) || 0) : Math.max(0, Number(client.debt) || 0);
+        const dueDate = cobranza?.dueDate ? new Date(cobranza.dueDate) : null;
+        const isDueOver = dueDate ? dueDate < today : false;
+
+        let debtStatus = 'Pagada';
+        if (balance > 0) {
+          debtStatus = cobranza?.status === 'Vencido' || isDueOver ? 'Vencido' : 'Pendiente';
+        }
+
+        const latestOrder = latestOrderByClient.get(key) || null;
+        const lastPurchase = client.lastPurchase ? new Date(client.lastPurchase) : latestOrder;
+
+        return {
+          id: client.id,
+          name: client.name,
+          zone: client.zone || '-',
+          status: client.status || 'Activo',
+          debtStatus,
+          balance,
+          dueDate,
+          lastPurchase,
+          cobranzaId: cobranza?.id || null,
+        };
+      })
+      .sort((a, b) => {
+        const priority = { Vencido: 0, Pendiente: 1, Pagada: 2 };
+        const statusDiff = priority[a.debtStatus] - priority[b.debtStatus];
+        if (statusDiff !== 0) return statusDiff;
+        return a.name.localeCompare(b.name);
+      });
+  }, [clients, cobranzaByClient, latestOrderByClient]);
+
+  const summary = useMemo(
+    () =>
+      clientRows.reduce(
+        (acc, row) => {
+          if (row.debtStatus === 'Vencido') acc.vencido += 1;
+          if (row.debtStatus === 'Pendiente') acc.pendiente += 1;
+          if (row.debtStatus === 'Pagada') acc.pagada += 1;
+          return acc;
+        },
+        { pendiente: 0, vencido: 0, pagada: 0 },
+      ),
+    [clientRows],
+  );
+
+  const handleDeleteCobranza = (cobranzaId) => {
+    setCobranzas((current) => current.filter((item) => item.id !== cobranzaId));
+  };
+
+  const formatDate = (date) => {
+    if (!date || Number.isNaN(date.getTime())) return '-';
+    return dateFormatter.format(date);
+  };
+
   return (
     <section className="screen">
-      <div className="screen-heading">
-        <p className="eyebrow">Clientes</p>
-        <h2>Modulo en construccion</h2>
-        <p className="muted">Esta pestaña quedara disponible en la siguiente iteracion.</p>
+      <div className="screen-heading orders-heading-compact">
+        <h2>Clientes</h2>
+        <p className="muted">Nombre, zona, deuda, vencimiento y ultima compra de cada cliente.</p>
       </div>
-      <div className="panel empty-orders">
-        <h3>Pronto veras la gestion dedicada de clientes</h3>
-        <p className="muted">Por ahora, utiliza ERP para revisar y cargar informacion comercial de clientes.</p>
+
+      <div className="status-summary-list" aria-label="Resumen de cobranza por cliente">
+        <span className="offer-chip">Pendiente: {summary.pendiente}</span>
+        <span className="offer-chip">Vencido: {summary.vencido}</span>
+        <span className="offer-chip">Pagada: {summary.pagada}</span>
+      </div>
+
+      <div className="inventory-grid">
+        {clientRows.length === 0 ? (
+          <div className="panel empty-orders">
+            <h3>No hay clientes para mostrar</h3>
+            <p className="muted">Revisa ERP para agregar clientes activos.</p>
+          </div>
+        ) : (
+          clientRows.map((row) => {
+            const debtClass = row.debtStatus === 'Vencido' ? 'debt-chip-overdue' : row.debtStatus === 'Pendiente' ? 'debt-chip-pending' : 'debt-chip-paid';
+
+            return (
+              <article className="panel client-card" key={row.id}>
+                <div className="inventory-card-head">
+                  <div>
+                    <p className="eyebrow">{row.zone}</p>
+                    <h3>{row.name}</h3>
+                  </div>
+                  <span className={`inventory-status-chip ${debtClass}`}>{row.debtStatus}</span>
+                </div>
+
+                <div className="inventory-metrics">
+                  <div>
+                    <span className="field-label">Estado de deuda</span>
+                    <strong>{formatCurrency(row.balance)}</strong>
+                  </div>
+                  <div>
+                    <span className="field-label">Hasta cuando paga</span>
+                    <strong>{formatDate(row.dueDate)}</strong>
+                  </div>
+                  <div>
+                    <span className="field-label">Ultima compra</span>
+                    <strong>{formatDate(row.lastPurchase)}</strong>
+                  </div>
+                  <div>
+                    <span className="field-label">Estado</span>
+                    <strong>{row.status}</strong>
+                  </div>
+                </div>
+
+                {row.debtStatus === 'Pagada' && row.cobranzaId ? (
+                  <button className="button button-secondary" type="button" onClick={() => handleDeleteCobranza(row.cobranzaId)}>
+                    Eliminar cobranza
+                  </button>
+                ) : null}
+              </article>
+            );
+          })
+        )}
       </div>
     </section>
   );
@@ -916,6 +1162,7 @@ function App() {
   const [orders, setOrders] = useState(() => loadOrders());
   const [products, setProducts] = useState(() => loadProducts());
   const [clients, setClients] = useState(() => loadClients());
+  const [cobranzas, setCobranzas] = useState(() => loadCobranzas());
   const [spaces, setSpaces] = useState(() => loadSpaces());
 
   useLayoutEffect(() => {
@@ -971,6 +1218,10 @@ function App() {
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.clients, clients);
   }, [clients]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.cobranzas, cobranzas);
+  }, [cobranzas]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.spaces, spaces);
@@ -1038,7 +1289,7 @@ function App() {
         ) : activeView === 'pedidos' ? (
           <OrdersView orders={orders} setOrders={setOrders} />
         ) : activeView === 'clientes' ? (
-          <ClientsView />
+          <ClientsView clients={clients} orders={orders} cobranzas={cobranzas} setCobranzas={setCobranzas} />
         ) : activeView === 'erp' ? (
           <ERPView clients={clients} setClients={setClients} spaces={spaces} setSpaces={setSpaces} orders={orders} />
         ) : (
