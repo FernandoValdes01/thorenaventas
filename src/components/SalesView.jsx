@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { DEFAULT_SELLER } from '../data/appData';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import { COMPANY_INFO } from '../data/companyInfo';
+import { DEFAULT_SELLER, logo as logoUrl } from '../data/appData';
 import { buildProductOptionLabel, getActiveOffer, getCurrentPrice } from '../lib/catalog';
 
 const EMPTY_FORM = {
@@ -29,6 +32,92 @@ const formatMoney = (value) => currencyFormatter.format(value);
 const formatRate = (rate) => `${Math.round(rate * 100)}%`;
 const roundMoney = (value) => Math.max(0, Math.round(value));
 
+const PDF_COLORS = {
+  navy: [22, 45, 86],
+  slate: [95, 106, 124],
+  softBg: [246, 248, 251],
+  border: [221, 226, 234],
+  white: [255, 255, 255],
+  accent: [16, 70, 140],
+};
+
+const loadImageAsDataUrl = (src) =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext('2d');
+
+        if (!context) {
+          reject(new Error('No se pudo inicializar canvas.'));
+          return;
+        }
+
+        context.drawImage(image, 0, 0);
+        resolve({
+          dataUrl: canvas.toDataURL('image/png'),
+          width: image.width,
+          height: image.height,
+        });
+      } catch (error) {
+        reject(error);
+      }
+    };
+    image.onerror = () => reject(new Error('No se pudo cargar el logo para PDF.'));
+    image.src = src;
+  });
+
+const drawContainedImage = (pdf, image, x, y, width, height, padding = 2) => {
+  if (!image?.dataUrl || !image?.width || !image?.height) {
+    return;
+  }
+
+  const maxWidth = Math.max(1, width - padding * 2);
+  const maxHeight = Math.max(1, height - padding * 2);
+  const ratio = Math.min(maxWidth / image.width, maxHeight / image.height);
+  const drawWidth = image.width * ratio;
+  const drawHeight = image.height * ratio;
+  const drawX = x + (width - drawWidth) / 2;
+  const drawY = y + (height - drawHeight) / 2;
+
+  pdf.addImage(image.dataUrl, 'PNG', drawX, drawY, drawWidth, drawHeight);
+};
+
+const drawCard = (pdf, { x, y, width, height, title, rows }) => {
+  pdf.setDrawColor(...PDF_COLORS.border);
+  pdf.setFillColor(...PDF_COLORS.white);
+  pdf.roundedRect(x, y, width, height, 2.5, 2.5, 'FD');
+
+  pdf.setFillColor(...PDF_COLORS.softBg);
+  pdf.roundedRect(x, y, width, 8, 2.5, 2.5, 'F');
+
+  pdf.setTextColor(...PDF_COLORS.navy);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(10);
+  pdf.text(title, x + 4, y + 5.4);
+
+  pdf.setTextColor(...PDF_COLORS.slate);
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(9);
+
+  let lineY = y + 12;
+  rows.forEach((row) => {
+    if (lineY > y + height - 3) {
+      return;
+    }
+
+    const [label, value] = row;
+    pdf.setFont('helvetica', 'bold');
+    pdf.text(`${label}:`, x + 4, lineY);
+    pdf.setFont('helvetica', 'normal');
+    pdf.text(String(value || '-'), x + 26, lineY);
+    lineY += 5.4;
+  });
+};
+
 const getProductById = (products, productId) => products.find((product) => product.id === productId) || null;
 
 const createInitialDraft = (products) => {
@@ -38,6 +127,25 @@ const createInitialDraft = (products) => {
     productId: availableProduct?.id || '',
     quantity: 1,
   };
+};
+
+const getNextOrderCode = (orders) =>
+  `PED-${String(
+    orders.reduce((highest, order) => {
+      const match = /^PED-(\d{4})$/.exec(order.code);
+      return Math.max(highest, match ? Number(match[1]) : 0);
+    }, 0) + 1,
+  ).padStart(4, '0')}`;
+
+const isValidOrderDraft = ({ form, selectedClient, items }) => {
+  const nextErrors = [];
+
+  if (!form.clientId) nextErrors.push('Selecciona un cliente para el pedido.');
+  if (!form.paymentMethod) nextErrors.push('Selecciona un metodo de pago.');
+  if (!selectedClient) nextErrors.push('El cliente seleccionado no esta disponible.');
+  if (items.length === 0) nextErrors.push('Agrega al menos un producto al pedido.');
+
+  return nextErrors;
 };
 
 const normalizeScales = (volumeScales = []) =>
@@ -106,6 +214,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
   const [items, setItems] = useState([]);
   const [feedback, setFeedback] = useState(null);
   const [errors, setErrors] = useState([]);
+  const [downloadingQuote, setDownloadingQuote] = useState(false);
 
   const normalizedScales = useMemo(() => normalizeScales(volumeScales), [volumeScales]);
   const availableProducts = useMemo(() => products.filter((product) => product.stock > 0), [products]);
@@ -205,15 +314,315 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
     setItems((current) => current.filter((item) => item.productId !== productId));
   };
 
+  const buildOrderPayload = (status) => ({
+    code: getNextOrderCode(orders),
+    createdAt: new Date().toISOString(),
+    saleChannel,
+    customerName: selectedClient?.name || '',
+    customerRut: selectedClient?.rut || '',
+    customerNumber: selectedClient?.phone || selectedClient?.contact || '',
+    contactPhone: selectedClient?.phone || selectedClient?.contact || '',
+    deliveryAddress: selectedClient?.address || '',
+    observations: form.observations.trim(),
+    clientId: form.clientId,
+    paymentMethod: form.paymentMethod,
+    clientSnapshot: selectedClient
+      ? {
+          id: selectedClient.id,
+          name: selectedClient.name,
+          type: selectedClient.type,
+          zone: selectedClient.zone,
+          sector: selectedClient.sector,
+          creditEnabled: Boolean(selectedClient.creditEnabled),
+          debt: Number(selectedClient.debt) || 0,
+        }
+      : null,
+    sellerName: DEFAULT_SELLER.name,
+    sellerRut: DEFAULT_SELLER.rut,
+    status,
+    subtotalBeforeDiscount,
+    totalDiscountAmount,
+    total,
+    items,
+  });
+
+  const handleDownloadQuote = async () => {
+    const nextErrors = isValidOrderDraft({ form, selectedClient, items });
+    setErrors(nextErrors);
+
+    if (nextErrors.length > 0) {
+      setFeedback(null);
+      return;
+    }
+
+    const quoteStatus = SALE_CHANNELS.online.initialStatus;
+    const draftOrder = buildOrderPayload(quoteStatus);
+    const client = draftOrder.clientSnapshot || selectedClient;
+
+    setDownloadingQuote(true);
+    setFeedback(null);
+
+    try {
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 14;
+      const contentWidth = pageWidth - margin * 2;
+      const top = 12;
+
+      let logoImage = null;
+      try {
+        logoImage = await loadImageAsDataUrl(logoUrl);
+      } catch {
+        logoImage = null;
+      }
+
+      pdf.setFillColor(...PDF_COLORS.softBg);
+      pdf.setDrawColor(...PDF_COLORS.border);
+      pdf.roundedRect(margin, top, contentWidth, 34, 3, 3, 'FD');
+
+      const logoBox = {
+        x: margin + 4,
+        y: top + 4,
+        width: 44,
+        height: 26,
+      };
+
+      pdf.setFillColor(...PDF_COLORS.white);
+      pdf.roundedRect(logoBox.x, logoBox.y, logoBox.width, logoBox.height, 2.5, 2.5, 'FD');
+      drawContainedImage(pdf, logoImage, logoBox.x, logoBox.y, logoBox.width, logoBox.height, 2);
+
+      const headingX = logoBox.x + logoBox.width + 6;
+      pdf.setTextColor(...PDF_COLORS.navy);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(18);
+      pdf.text('Cotización Comercial', headingX, top + 12);
+
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(10);
+      pdf.setTextColor(...PDF_COLORS.slate);
+      pdf.text(`N° Cotización: ${draftOrder.code}`, headingX, top + 20);
+      pdf.text(`Fecha: ${new Date(draftOrder.createdAt).toLocaleString('es-CL')}`, headingX, top + 26);
+
+      const cardsTop = top + 40;
+      const gap = 6;
+      const halfCardWidth = (contentWidth - gap) / 2;
+      const cardHeight = 36;
+
+      drawCard(pdf, {
+        x: margin,
+        y: cardsTop,
+        width: halfCardWidth,
+        height: cardHeight,
+        title: '1. Datos de Thorena',
+        rows: [
+          ['Nombre', COMPANY_INFO.name],
+          ['Dirección', COMPANY_INFO.address],
+          ['RUT', COMPANY_INFO.rut],
+          ['Teléfono', COMPANY_INFO.phone],
+          ['Correo', COMPANY_INFO.email],
+        ],
+      });
+
+      drawCard(pdf, {
+        x: margin + halfCardWidth + gap,
+        y: cardsTop,
+        width: halfCardWidth,
+        height: cardHeight,
+        title: '2. Datos del cliente',
+        rows: [
+          ['Nombre', draftOrder.customerName || '-'],
+          ['RUT', draftOrder.customerRut || '-'],
+          ['Dirección', draftOrder.deliveryAddress || '-'],
+          ['Teléfono', draftOrder.customerNumber || '-'],
+          ['Zona/Sector', `${client?.zone || '-'} / ${client?.sector || '-'}`],
+        ],
+      });
+
+      const conditionsTop = cardsTop + cardHeight + 6;
+      const defaultObservations = 'Precios sujetos a disponibilidad de stock.';
+      const commercialConditions = {
+        paymentMethod: draftOrder.paymentMethod || 'Por definir',
+        validity: '7 días',
+        deliveryTerm: 'Según disponibilidad',
+        owner: draftOrder.sellerName && draftOrder.sellerName !== '-' ? draftOrder.sellerName : 'Thorena Comercial',
+        observations: draftOrder.observations || defaultObservations,
+      };
+
+      const conditionRows = [
+        ['Método de pago', commercialConditions.paymentMethod],
+        ['Validez', commercialConditions.validity],
+        ['Plazo de entrega', commercialConditions.deliveryTerm],
+        ['Responsable', commercialConditions.owner],
+        ['Observaciones', commercialConditions.observations],
+      ];
+
+      const conditionsCard = {
+        x: margin,
+        y: conditionsTop,
+        width: contentWidth,
+      };
+
+      const labelOffsetX = 4;
+      const valueOffsetX = 42;
+      const lineHeight = 4.1;
+      const rowSpacing = 1.8;
+      const bodyStartY = conditionsCard.y + 12;
+      const valueWidth = conditionsCard.width - valueOffsetX - 4;
+
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+
+      const preparedConditionRows = conditionRows.map(([label, value]) => ({
+        label,
+        lines: pdf.splitTextToSize(String(value || '-'), valueWidth),
+      }));
+
+      const bodyHeight = preparedConditionRows.reduce(
+        (sum, row) => sum + Math.max(1, row.lines.length) * lineHeight + rowSpacing,
+        0,
+      );
+
+      const conditionsHeight = Math.max(34, 12 + bodyHeight + 2);
+
+      pdf.setDrawColor(...PDF_COLORS.border);
+      pdf.setFillColor(...PDF_COLORS.white);
+      pdf.roundedRect(conditionsCard.x, conditionsCard.y, conditionsCard.width, conditionsHeight, 2.5, 2.5, 'FD');
+
+      pdf.setFillColor(...PDF_COLORS.softBg);
+      pdf.roundedRect(conditionsCard.x, conditionsCard.y, conditionsCard.width, 8, 2.5, 2.5, 'F');
+
+      pdf.setTextColor(...PDF_COLORS.navy);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(10);
+      pdf.text('3. Condiciones comerciales', conditionsCard.x + 4, conditionsCard.y + 5.4);
+
+      pdf.setTextColor(...PDF_COLORS.slate);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+
+      let rowY = bodyStartY;
+      preparedConditionRows.forEach((row) => {
+        pdf.setFont('helvetica', 'bold');
+        pdf.text(`${row.label}:`, conditionsCard.x + labelOffsetX, rowY);
+
+        pdf.setFont('helvetica', 'normal');
+        pdf.text(row.lines, conditionsCard.x + valueOffsetX, rowY);
+
+        rowY += Math.max(1, row.lines.length) * lineHeight + rowSpacing;
+      });
+
+      const tableStartY = conditionsCard.y + conditionsHeight + 6;
+      autoTable(pdf, {
+        startY: tableStartY,
+        head: [['Producto', 'Cant.', 'Descuento por cantidad', 'Descuento', 'Unitario', 'Subtotal']],
+        body: draftOrder.items.map((item) => [
+          item.productName,
+          item.quantity,
+          `${item.volumeDiscountPercent || 0}%`,
+          item.discountAmount > 0 ? `-${formatMoney(item.discountAmount)}` : formatMoney(0),
+          formatMoney(item.unitPrice),
+          formatMoney(item.subtotal),
+        ]),
+        theme: 'grid',
+        styles: {
+          fontSize: 9,
+          cellPadding: 3,
+          lineColor: PDF_COLORS.border,
+          textColor: [45, 56, 72],
+        },
+        headStyles: {
+          fillColor: PDF_COLORS.navy,
+          textColor: PDF_COLORS.white,
+          fontStyle: 'bold',
+          halign: 'center',
+        },
+        alternateRowStyles: {
+          fillColor: [250, 252, 255],
+        },
+        columnStyles: {
+          0: { halign: 'left', cellWidth: 66 },
+          1: { halign: 'center', cellWidth: 16 },
+          2: { halign: 'right', cellWidth: 32 },
+          3: { halign: 'right', cellWidth: 24 },
+          4: { halign: 'right', cellWidth: 24 },
+          5: { halign: 'right', cellWidth: 24 },
+        },
+      });
+
+      let summaryTop = (pdf.lastAutoTable?.finalY || tableStartY) + 7;
+      const summaryWidth = 74;
+      const summaryHeight = 31;
+      const footerReserve = 30;
+
+      if (summaryTop + summaryHeight + footerReserve > pageHeight) {
+        pdf.addPage('a4', 'portrait');
+        summaryTop = margin;
+      }
+
+      const summaryX = pageWidth - margin - summaryWidth;
+
+      pdf.setFillColor(...PDF_COLORS.softBg);
+      pdf.setDrawColor(...PDF_COLORS.border);
+      pdf.roundedRect(summaryX, summaryTop, summaryWidth, summaryHeight, 2.5, 2.5, 'FD');
+
+      pdf.setTextColor(...PDF_COLORS.navy);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(10);
+      pdf.text('Resumen financiero', summaryX + 4, summaryTop + 6);
+
+      const valueX = summaryX + summaryWidth - 4;
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      pdf.setTextColor(...PDF_COLORS.slate);
+      pdf.text('Subtotal sin descuento', summaryX + 4, summaryTop + 12);
+      pdf.text(formatMoney(draftOrder.subtotalBeforeDiscount || draftOrder.total), valueX, summaryTop + 12, { align: 'right' });
+
+      pdf.text('Descuento por escala', summaryX + 4, summaryTop + 18);
+      pdf.text(`-${formatMoney(draftOrder.totalDiscountAmount || 0)}`, valueX, summaryTop + 18, { align: 'right' });
+
+      pdf.setDrawColor(...PDF_COLORS.border);
+      pdf.line(summaryX + 4, summaryTop + 21, summaryX + summaryWidth - 4, summaryTop + 21);
+
+      pdf.setTextColor(...PDF_COLORS.accent);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(12);
+      pdf.text('Total cotizado', summaryX + 4, summaryTop + 28);
+      pdf.text(formatMoney(draftOrder.total), valueX, summaryTop + 28, { align: 'right' });
+
+      const footerY = pageHeight - 16;
+      pdf.setDrawColor(...PDF_COLORS.border);
+      pdf.line(margin, footerY - 6, pageWidth - margin, footerY - 6);
+
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(8.3);
+      pdf.setTextColor(...PDF_COLORS.slate);
+      pdf.text('Documento no tributario. Esta cotización no constituye boleta ni factura.', pageWidth / 2, footerY - 1.5, {
+        align: 'center',
+      });
+
+      pdf.text(
+        `${COMPANY_INFO.email}  |  ${COMPANY_INFO.phone}  |  ${COMPANY_INFO.address}`,
+        pageWidth / 2,
+        footerY + 3.8,
+        { align: 'center' },
+      );
+
+      const safeClientName = (draftOrder.customerName || 'cliente').toLowerCase().replace(/\s+/g, '-');
+      const fileName = `cotizacion-${draftOrder.code}-${safeClientName}.pdf`;
+      pdf.save(fileName);
+      setFeedback({ type: 'success', text: `Cotización descargada correctamente (${fileName}).` });
+    } catch {
+      setFeedback({ type: 'error', text: 'No se pudo generar la cotizacion PDF.' });
+    } finally {
+      setDownloadingQuote(false);
+    }
+  };
+
   const handleGenerateOrder = (event) => {
     event.preventDefault();
 
-    const nextErrors = [];
-
-    if (!form.clientId) nextErrors.push('Selecciona un cliente para el pedido.');
-    if (!form.paymentMethod) nextErrors.push('Selecciona un metodo de pago.');
-    if (!selectedClient) nextErrors.push('El cliente seleccionado no esta disponible.');
-    if (items.length === 0) nextErrors.push('Agrega al menos un producto al pedido.');
+    const nextErrors = isValidOrderDraft({ form, selectedClient, items });
 
     setErrors(nextErrors);
 
@@ -222,45 +631,8 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
       return;
     }
 
-    const code = `PED-${String(
-      orders.reduce((highest, order) => {
-        const match = /^PED-(\d{4})$/.exec(order.code);
-        return Math.max(highest, match ? Number(match[1]) : 0);
-      }, 0) + 1,
-    ).padStart(4, '0')}`;
-
     const initialStatus = SALE_CHANNELS[saleChannel]?.initialStatus || 'Pedido';
-    const newOrder = {
-      code,
-      createdAt: new Date().toISOString(),
-      saleChannel,
-      customerName: selectedClient?.name || '',
-      customerRut: selectedClient?.rut || '',
-      customerNumber: selectedClient?.phone || selectedClient?.contact || '',
-      contactPhone: selectedClient?.phone || selectedClient?.contact || '',
-      deliveryAddress: selectedClient?.address || '',
-      observations: form.observations.trim(),
-      clientId: form.clientId,
-      paymentMethod: form.paymentMethod,
-      clientSnapshot: selectedClient
-        ? {
-            id: selectedClient.id,
-            name: selectedClient.name,
-            type: selectedClient.type,
-            zone: selectedClient.zone,
-            sector: selectedClient.sector,
-            creditEnabled: Boolean(selectedClient.creditEnabled),
-            debt: Number(selectedClient.debt) || 0,
-          }
-        : null,
-      sellerName: DEFAULT_SELLER.name,
-      sellerRut: DEFAULT_SELLER.rut,
-      status: initialStatus,
-      subtotalBeforeDiscount,
-      totalDiscountAmount,
-      total,
-      items,
-    };
+    const newOrder = buildOrderPayload(initialStatus);
 
     setOrders((current) => [...current, newOrder]);
 
@@ -279,7 +651,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
       }),
     );
 
-    setFeedback({ type: 'success', text: `Pedido generado correctamente. Codigo ${code} en estado ${initialStatus}.` });
+    setFeedback({ type: 'success', text: `Pedido generado correctamente. Codigo ${newOrder.code} en estado ${initialStatus}.` });
     setErrors([]);
     setForm(EMPTY_FORM);
     setDraft(createInitialDraft(products));
@@ -474,9 +846,25 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
             <strong>{formatMoney(total)}</strong>
           </div>
 
-          <button className="button button-primary button-full" type="submit" form="sales-form">
-            Generar pedido
-          </button>
+          {saleChannel === 'online' ? (
+            <>
+              <button
+                className="button button-secondary button-full"
+                type="button"
+                onClick={handleDownloadQuote}
+                disabled={downloadingQuote}
+              >
+                {downloadingQuote ? 'Generando PDF...' : 'Descargar cotizacion'}
+              </button>
+              <button className="button button-primary button-full" type="submit" form="sales-form">
+                Generar pedido
+              </button>
+            </>
+          ) : (
+            <button className="button button-primary button-full" type="submit" form="sales-form">
+              Generar pedido
+            </button>
+          )}
         </aside>
       </div>
     </section>

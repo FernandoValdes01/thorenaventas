@@ -35,6 +35,7 @@ const STORAGE_KEYS = {
 };
 
 const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pagado', 'Pendiente', 'Anulado'];
+const FINAL_ORDER_STATUSES = new Set(['Pagado', 'Anulado', 'Terminado']);
 const ORDER_DETAIL_EXPAND_THRESHOLD = 4;
 
 const EMPTY_FORM = {
@@ -696,6 +697,7 @@ function OrderCard({ order, onUpdateStatus }) {
   const hiddenItemsCount = Math.max(0, order.items.length - visibleItems.length);
   const totalUnits = order.items.reduce((sum, item) => sum + item.quantity, 0);
   const lineDiscountTotal = order.items.reduce((sum, item) => sum + (item.discountAmount || 0), 0);
+  const statusLocked = FINAL_ORDER_STATUSES.has(order.status);
 
   return (
     <article className={order.status === 'Pagado' ? 'order-card panel order-card-done' : 'order-card panel'}>
@@ -711,20 +713,24 @@ function OrderCard({ order, onUpdateStatus }) {
 
       <div className="order-grid">
         <div>
+          <span className="field-label">Nombre cliente</span>
+          <p>{order.customerName || '-'}</p>
+        </div>
+        <div>
           <span className="field-label">RUT cliente</span>
           <p>{order.customerRut || '-'}</p>
         </div>
         <div>
-          <span className="field-label">Numero cliente / contacto</span>
+          <span className="field-label">Direccion de despacho</span>
+          <p>{order.deliveryAddress || '-'}</p>
+        </div>
+        <div>
+          <span className="field-label">Telefono cliente</span>
           <p>{getCustomerContact(order)}</p>
         </div>
         <div>
           <span className="field-label">Metodo de pago</span>
           <p>{order.paymentMethod || '-'}</p>
-        </div>
-        <div>
-          <span className="field-label">Direccion de despacho</span>
-          <p>{order.deliveryAddress || '-'}</p>
         </div>
         <div>
           <span className="field-label">Tipo de cliente</span>
@@ -808,7 +814,7 @@ function OrderCard({ order, onUpdateStatus }) {
 
         <label className="field status-select-field">
           <span>Estado ERP</span>
-          <select value={order.status} onChange={(event) => onUpdateStatus(order.code, event.target.value)}>
+          <select value={order.status} onChange={(event) => onUpdateStatus(order.code, event.target.value)} disabled={statusLocked}>
             {ERP_ORDER_STATUSES.map((status) => (
               <option key={status} value={status}>
                 {status}
@@ -816,6 +822,7 @@ function OrderCard({ order, onUpdateStatus }) {
             ))}
           </select>
         </label>
+        {statusLocked ? <span className="status-lock-note">Estado final bloqueado</span> : null}
       </div>
     </article>
   );
@@ -831,7 +838,7 @@ function OrdersView({ orders, setOrders }) {
 
     setOrders((current) =>
       current.map((order) =>
-        order.code === code
+        order.code === code && !FINAL_ORDER_STATUSES.has(order.status)
           ? {
               ...order,
               status: nextStatus,
@@ -848,10 +855,9 @@ function OrdersView({ orders, setOrders }) {
 
   return (
     <section className="screen">
-      <div className="screen-heading">
-        <p className="eyebrow">Pedidos</p>
-        <h2>Seguimiento de pedidos ERP</h2>
-        <p className="muted">Gestiona estado, cliente y detalle con descuentos por producto.</p>
+      <div className="screen-heading orders-heading-compact">
+        <h2>Pedidos</h2>
+        <p className="muted">Estado, cliente y detalle con descuentos por producto.</p>
       </div>
 
       {ordered.length === 0 ? (
@@ -861,25 +867,15 @@ function OrdersView({ orders, setOrders }) {
         </div>
       ) : (
         <div className="orders-groups">
-          <section className="orders-group">
-            <div className="section-heading compact-section-heading">
-              <h3>Resumen por estado</h3>
-              <p className="muted">Estados ERP disponibles para todos los pedidos.</p>
-            </div>
-            <div className="status-summary-list">
-              {statusSummary.map((row) => (
-                <span key={row.status} className="offer-chip">
-                  {row.status}: {row.count}
-                </span>
-              ))}
-            </div>
-          </section>
+          <div className="status-summary-list" aria-label="Resumen de estados">
+            {statusSummary.map((row) => (
+              <span key={row.status} className="offer-chip">
+                {row.status}: {row.count}
+              </span>
+            ))}
+          </div>
 
           <section className="orders-group">
-            <div className="section-heading compact-section-heading">
-              <h3>Listado completo</h3>
-              <p className="muted">Visualiza los pedidos y ajusta su estado cuando corresponda.</p>
-            </div>
             <div className="orders-list">
               {ordered.map((order) => (
                 <OrderCard key={order.code} order={order} onUpdateStatus={updateStatus} />

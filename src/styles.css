@@ -837,10 +837,32 @@ textarea:focus {
   min-width: 240px;
 }
 
+.status-select-field select:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .status-summary-list {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.orders-heading-compact {
+  gap: 6px;
+}
+
+.status-lock-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.82rem;
 }
 
 .done-note {
