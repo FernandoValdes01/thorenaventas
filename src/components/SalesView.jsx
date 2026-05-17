@@ -20,7 +20,39 @@ const SALE_CHANNELS = {
     label: 'Venta Online',
     initialStatus: 'Cotizado',
   },
+  oficina: {
+    label: 'Venta Oficina',
+    initialStatus: 'Pagado',
+  },
 };
+
+const OFFICE_PAYMENT_METHODS = ['Efectivo', 'Debito', 'Credito', 'Transferencia'];
+
+const NATURAL_CLIENT_ID = 'CLI-NATURAL';
+const NATURAL_CLIENT = {
+  id: NATURAL_CLIENT_ID,
+  name: 'Cliente natural',
+  type: 'Cliente natural',
+  rut: '',
+  phone: '',
+  contact: '',
+  address: '',
+  zone: '',
+  sector: '',
+  status: 'Activo',
+  creditEnabled: false,
+  debt: 0,
+};
+
+const QUOTE_DATA_MARKER_START = 'THORENA_QUOTE_DATA_BEGIN:';
+const QUOTE_DATA_MARKER_END = ':THORENA_QUOTE_DATA_END';
+
+const normalizeText = (value) =>
+  String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .trim();
 
 const currencyFormatter = new Intl.NumberFormat('es-CL', {
   style: 'currency',
@@ -31,6 +63,23 @@ const currencyFormatter = new Intl.NumberFormat('es-CL', {
 const formatMoney = (value) => currencyFormatter.format(value);
 const formatRate = (rate) => `${Math.round(rate * 100)}%`;
 const roundMoney = (value) => Math.max(0, Math.round(value));
+
+const encodeQuotePayload = (payload) => {
+  try {
+    return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+  } catch {
+    return '';
+  }
+};
+
+const decodeQuotePayload = (encoded) => {
+  try {
+    const decoded = decodeURIComponent(escape(atob(encoded)));
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+};
 
 const PDF_COLORS = {
   navy: [22, 45, 86],
@@ -207,7 +256,7 @@ const buildPricedItem = (product, quantity, scales) => {
   };
 };
 
-function SalesView({ products, setProducts, orders, setOrders, clients, paymentMethods, volumeScales }) {
+function SalesView({ products, setProducts, orders, setOrders, clients, paymentMethods, volumeScales, cityRates }) {
   const [saleChannel, setSaleChannel] = useState('terreno');
   const [form, setForm] = useState(EMPTY_FORM);
   const [draft, setDraft] = useState(() => createInitialDraft(products));
@@ -215,25 +264,57 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
   const [feedback, setFeedback] = useState(null);
   const [errors, setErrors] = useState([]);
   const [downloadingQuote, setDownloadingQuote] = useState(false);
+  const [loadingQuote, setLoadingQuote] = useState(false);
 
   const normalizedScales = useMemo(() => normalizeScales(volumeScales), [volumeScales]);
   const availableProducts = useMemo(() => products.filter((product) => product.stock > 0), [products]);
   const availablePaymentMethods = useMemo(() => paymentMethods || [], [paymentMethods]);
-  const activeClients = useMemo(
-    () => clients.filter((client) => client.name && (client.status || 'Activo') === 'Activo'),
-    [clients],
+  const normalizedCityRates = useMemo(
+    () =>
+      (cityRates || [])
+        .map((item) => ({ city: String(item?.city || '').trim(), rate: Math.max(0, Number(item?.rate) || 0) }))
+        .filter((item) => item.city),
+    [cityRates],
   );
+  const activeClients = useMemo(() => {
+    const normalized = clients.filter((client) => client.name && (client.status || 'Activo') === 'Activo');
+    if (normalized.some((client) => client.id === NATURAL_CLIENT_ID)) {
+      return normalized;
+    }
+    return [NATURAL_CLIENT, ...normalized];
+  }, [clients]);
+  const availablePaymentMethodsByChannel = useMemo(() => {
+    if (saleChannel === 'oficina') {
+      return OFFICE_PAYMENT_METHODS;
+    }
+    return availablePaymentMethods;
+  }, [availablePaymentMethods, saleChannel]);
   const selectedClient = useMemo(
     () => activeClients.find((client) => client.id === form.clientId) || null,
     [activeClients, form.clientId],
   );
+  const selectedCity = useMemo(() => String(selectedClient?.zone || '').trim(), [selectedClient?.zone]);
+  const dispatchRate = useMemo(() => {
+    if (saleChannel === 'oficina') {
+      return 0;
+    }
+
+    const cityKey = normalizeText(selectedCity);
+    if (!cityKey || cityKey === 'villarrica') {
+      return 0;
+    }
+    const match = normalizedCityRates.find((item) => normalizeText(item.city) === cityKey);
+    return Math.max(0, match?.rate || 0);
+  }, [normalizedCityRates, selectedCity, saleChannel]);
 
   const subtotalBeforeDiscount = useMemo(
     () => items.reduce((sum, item) => sum + (item.subtotalBeforeScale || item.subtotal), 0),
     [items],
   );
-  const total = useMemo(() => items.reduce((sum, item) => sum + item.subtotal, 0), [items]);
-  const totalDiscountAmount = useMemo(() => Math.max(0, subtotalBeforeDiscount - total), [subtotalBeforeDiscount, total]);
+  const itemsTotal = useMemo(() => items.reduce((sum, item) => sum + item.subtotal, 0), [items]);
+  const totalDiscountAmount = useMemo(() => Math.max(0, subtotalBeforeDiscount - itemsTotal), [subtotalBeforeDiscount, itemsTotal]);
+  const dispatchSurcharge = useMemo(() => roundMoney(itemsTotal * dispatchRate), [itemsTotal, dispatchRate]);
+  const total = useMemo(() => itemsTotal + dispatchSurcharge, [itemsTotal, dispatchSurcharge]);
 
   useEffect(() => {
     if (!availableProducts.length) {
@@ -248,6 +329,19 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
       setDraft((current) => ({ ...current, productId: availableProducts[0].id }));
     }
   }, [availableProducts, draft.productId]);
+
+  useEffect(() => {
+    if (!availablePaymentMethodsByChannel.length) {
+      if (form.paymentMethod) {
+        setForm((current) => ({ ...current, paymentMethod: '' }));
+      }
+      return;
+    }
+
+    if (!availablePaymentMethodsByChannel.includes(form.paymentMethod)) {
+      setForm((current) => ({ ...current, paymentMethod: availablePaymentMethodsByChannel[0] }));
+    }
+  }, [availablePaymentMethodsByChannel, form.paymentMethod]);
 
   const handleFieldChange = (key) => (event) => {
     setForm((current) => ({ ...current, [key]: event.target.value }));
@@ -314,8 +408,8 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
     setItems((current) => current.filter((item) => item.productId !== productId));
   };
 
-  const buildOrderPayload = (status) => ({
-    code: getNextOrderCode(orders),
+  const buildDraftPayload = ({ status, includeCode = false }) => ({
+    ...(includeCode ? { code: getNextOrderCode(orders) } : {}),
     createdAt: new Date().toISOString(),
     saleChannel,
     customerName: selectedClient?.name || '',
@@ -342,9 +436,86 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
     status,
     subtotalBeforeDiscount,
     totalDiscountAmount,
+    dispatchCity: selectedCity,
+    dispatchRate,
+    dispatchSurcharge,
+    itemsTotal,
     total,
     items,
   });
+
+  const buildOrderPayload = (status) => buildDraftPayload({ status, includeCode: true });
+
+  const handleLoadQuote = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+
+    if (!file) return;
+
+    setLoadingQuote(true);
+    setFeedback(null);
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const content = new TextDecoder('latin1').decode(buffer);
+      const startIndex = content.indexOf(QUOTE_DATA_MARKER_START);
+      const endIndex = content.indexOf(QUOTE_DATA_MARKER_END, startIndex + QUOTE_DATA_MARKER_START.length);
+
+      if (startIndex < 0 || endIndex < 0 || endIndex <= startIndex) {
+        throw new Error('Formato no compatible.');
+      }
+
+      const encoded = content
+        .slice(startIndex + QUOTE_DATA_MARKER_START.length, endIndex)
+        .replace(/\\/g, '')
+        .trim();
+      const payload = decodeQuotePayload(encoded);
+
+      if (!payload || !Array.isArray(payload.items)) {
+        throw new Error('Contenido de cotizacion invalido.');
+      }
+
+      const nextChannel = payload.saleChannel === 'oficina' ? 'oficina' : 'online';
+      setSaleChannel(nextChannel);
+
+      const nextPaymentMethod = payload.paymentMethod || '';
+      const validPaymentMethod =
+        nextChannel === 'oficina'
+          ? OFFICE_PAYMENT_METHODS.includes(nextPaymentMethod)
+            ? nextPaymentMethod
+            : OFFICE_PAYMENT_METHODS[0]
+          : nextPaymentMethod;
+
+      setForm({
+        clientId: payload.clientId || '',
+        paymentMethod: validPaymentMethod,
+        observations: String(payload.observations || ''),
+      });
+
+      const rebuiltItems = payload.items
+        .map((item) => {
+          const product = getProductById(products, item.productId);
+          const quantity = Math.max(1, Number(item.quantity) || 1);
+          if (!product) {
+            return null;
+          }
+          return buildPricedItem(product, quantity, normalizedScales);
+        })
+        .filter(Boolean);
+
+      if (!rebuiltItems.length) {
+        throw new Error('No se encontraron productos vigentes en la cotizacion.');
+      }
+
+      setItems(rebuiltItems);
+      setErrors([]);
+      setFeedback({ type: 'success', text: 'Cotizacion cargada correctamente. Ya puedes generar el pedido.' });
+    } catch {
+      setFeedback({ type: 'error', text: 'No se pudo cargar la cotizacion PDF.' });
+    } finally {
+      setLoadingQuote(false);
+    }
+  };
 
   const handleDownloadQuote = async () => {
     const nextErrors = isValidOrderDraft({ form, selectedClient, items });
@@ -356,7 +527,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
     }
 
     const quoteStatus = SALE_CHANNELS.online.initialStatus;
-    const draftOrder = buildOrderPayload(quoteStatus);
+    const draftOrder = buildDraftPayload({ status: quoteStatus, includeCode: false });
     const client = draftOrder.clientSnapshot || selectedClient;
 
     setDownloadingQuote(true);
@@ -401,7 +572,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
       pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(10);
       pdf.setTextColor(...PDF_COLORS.slate);
-      pdf.text(`N° Cotización: ${draftOrder.code}`, headingX, top + 20);
+      pdf.text(`Canal: ${SALE_CHANNELS[draftOrder.saleChannel]?.label || 'Venta Online'}`, headingX, top + 20);
       pdf.text(`Fecha: ${new Date(draftOrder.createdAt).toLocaleString('es-CL')}`, headingX, top + 26);
 
       const cardsTop = top + 40;
@@ -552,7 +723,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
 
       let summaryTop = (pdf.lastAutoTable?.finalY || tableStartY) + 7;
       const summaryWidth = 74;
-      const summaryHeight = 31;
+      const summaryHeight = 39;
       const footerReserve = 30;
 
       if (summaryTop + summaryHeight + footerReserve > pageHeight) {
@@ -581,14 +752,17 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
       pdf.text('Descuento por escala', summaryX + 4, summaryTop + 18);
       pdf.text(`-${formatMoney(draftOrder.totalDiscountAmount || 0)}`, valueX, summaryTop + 18, { align: 'right' });
 
+      pdf.text(`Despacho ${Math.round((draftOrder.dispatchRate || 0) * 100)}%`, summaryX + 4, summaryTop + 24);
+      pdf.text(formatMoney(draftOrder.dispatchSurcharge || 0), valueX, summaryTop + 24, { align: 'right' });
+
       pdf.setDrawColor(...PDF_COLORS.border);
-      pdf.line(summaryX + 4, summaryTop + 21, summaryX + summaryWidth - 4, summaryTop + 21);
+      pdf.line(summaryX + 4, summaryTop + 27, summaryX + summaryWidth - 4, summaryTop + 27);
 
       pdf.setTextColor(...PDF_COLORS.accent);
       pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(12);
-      pdf.text('Total cotizado', summaryX + 4, summaryTop + 28);
-      pdf.text(formatMoney(draftOrder.total), valueX, summaryTop + 28, { align: 'right' });
+      pdf.text('Total cotizado', summaryX + 4, summaryTop + 35);
+      pdf.text(formatMoney(draftOrder.total), valueX, summaryTop + 35, { align: 'right' });
 
       const footerY = pageHeight - 16;
       pdf.setDrawColor(...PDF_COLORS.border);
@@ -608,8 +782,33 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
         { align: 'center' },
       );
 
+      const quoteExportPayload = {
+        createdAt: draftOrder.createdAt,
+        saleChannel: draftOrder.saleChannel,
+        clientId: draftOrder.clientId,
+        paymentMethod: draftOrder.paymentMethod,
+        observations: draftOrder.observations,
+        dispatchCity: draftOrder.dispatchCity,
+        dispatchRate: draftOrder.dispatchRate,
+        dispatchSurcharge: draftOrder.dispatchSurcharge,
+        itemsTotal: draftOrder.itemsTotal,
+        total: draftOrder.total,
+        items: draftOrder.items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+        })),
+      };
+      const encodedQuotePayload = encodeQuotePayload(quoteExportPayload);
+      if (encodedQuotePayload) {
+        pdf.setTextColor(255, 255, 255);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(1);
+        pdf.text(`${QUOTE_DATA_MARKER_START}${encodedQuotePayload}${QUOTE_DATA_MARKER_END}`, margin, pageHeight - 1);
+      }
+
       const safeClientName = (draftOrder.customerName || 'cliente').toLowerCase().replace(/\s+/g, '-');
-      const fileName = `cotizacion-${draftOrder.code}-${safeClientName}.pdf`;
+      const safeDate = new Date(draftOrder.createdAt).toISOString().slice(0, 10);
+      const fileName = `cotizacion-${safeClientName}-${safeDate}.pdf`;
       pdf.save(fileName);
       setFeedback({ type: 'success', text: `Cotización descargada correctamente (${fileName}).` });
     } catch {
@@ -701,7 +900,11 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
         <form id="sales-form" className="panel sales-panel" onSubmit={handleGenerateOrder}>
           <div className="panel-title">
             <h3>Datos del pedido</h3>
-            <p className="muted">El sistema toma automaticamente los datos del cliente seleccionado.</p>
+            <p className="muted">
+              {saleChannel === 'oficina'
+                ? 'Completa cliente, pago y productos para cerrar la venta como pagada.'
+                : 'El sistema toma automaticamente los datos del cliente seleccionado.'}
+            </p>
           </div>
 
           <div className="form-grid">
@@ -711,7 +914,8 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
                 <option value="">Selecciona un cliente</option>
                 {activeClients.map((client) => (
                   <option key={client.id} value={client.id}>
-                    {client.name} - {client.zone}
+                    {client.name}
+                    {client.zone ? ` - ${client.zone}` : ''}
                   </option>
                 ))}
               </select>
@@ -721,7 +925,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
               <span>Seleccione metodo de pago</span>
               <select value={form.paymentMethod} onChange={handleFieldChange('paymentMethod')}>
                 <option value="">Selecciona metodo de pago</option>
-                {availablePaymentMethods.map((method) => (
+                {availablePaymentMethodsByChannel.map((method) => (
                   <option key={method} value={method}>
                     {method}
                   </option>
@@ -842,6 +1046,10 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
             <div>
               <span>Total general</span>
               {totalDiscountAmount > 0 ? <p className="muted">Descuento por escala aplicado: -{formatMoney(totalDiscountAmount)}</p> : null}
+              <p className="muted">Ciudad despacho: {selectedCity || 'Sin ciudad'}</p>
+              <p className="muted">
+                Tarifa ciudad ({Math.round(dispatchRate * 100)}%): {formatMoney(dispatchSurcharge)}
+              </p>
             </div>
             <strong>{formatMoney(total)}</strong>
           </div>
@@ -856,6 +1064,10 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
               >
                 {downloadingQuote ? 'Generando PDF...' : 'Descargar cotizacion'}
               </button>
+              <label className="button button-secondary button-full" aria-disabled={loadingQuote}>
+                {loadingQuote ? 'Cargando cotizacion...' : 'Cargar cotizacion'}
+                <input type="file" accept="application/pdf,.pdf" onChange={handleLoadQuote} disabled={loadingQuote} hidden />
+              </label>
               <button className="button button-primary button-full" type="submit" form="sales-form">
                 Generar pedido
               </button>

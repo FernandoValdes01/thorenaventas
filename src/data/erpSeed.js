@@ -2,6 +2,23 @@ export const ERP_PAYMENT_METHODS = ['Efectivo', 'Transferencia', 'Debito/Credito
 
 export const ERP_CLIENTS = [
   {
+    id: 'CLI-NATURAL',
+    name: 'Cliente natural',
+    type: 'Cliente natural',
+    rut: '',
+    phone: '',
+    contact: '',
+    email: '',
+    address: '',
+    sector: '',
+    zone: '',
+    frequency: 'Semanal',
+    creditEnabled: false,
+    debt: 0,
+    observations: '',
+    status: 'Activo',
+  },
+  {
     id: 'CLI-001',
     name: 'Provisiones bazar',
     type: 'Negocio fijo',

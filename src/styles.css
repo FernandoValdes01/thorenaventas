@@ -236,6 +236,10 @@ textarea:focus {
 }
 
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   border: 1px solid transparent;
   border-radius: 999px;
   min-height: 46px;

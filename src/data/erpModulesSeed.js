@@ -380,6 +380,16 @@ export const ERP_SALES = [
   },
 ];
 
+export const ERP_CITY_RATES = [
+  { id: 'city-001', city: 'Villarrica', rate: 0 },
+  { id: 'city-002', city: 'Pucon', rate: 0.025 },
+  { id: 'city-003', city: 'Conaripe', rate: 0.05 },
+  { id: 'city-004', city: 'Lican Ray', rate: 0.03 },
+  { id: 'city-005', city: 'Pitrufquen', rate: 0.07 },
+  { id: 'city-006', city: 'Nancul', rate: 0.04 },
+  { id: 'city-007', city: 'Curarrehue', rate: 0.06 },
+];
+
 export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-HIG-001',

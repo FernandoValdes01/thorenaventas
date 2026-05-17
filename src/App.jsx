@@ -19,6 +19,7 @@ import {
   ERP_SALES,
   ERP_SCALES,
   ERP_SUPPLIERS,
+  ERP_CITY_RATES,
 } from './data/erpModulesSeed';
 import ProductsView from './components/ProductsView';
 import ERPView from './components/ERPView';
@@ -48,6 +49,7 @@ const STORAGE_KEYS = {
   erpSales: 'thorena.erp-sales',
   erpProductsFull: 'thorena.erp-products-full',
   erpSuppliers: 'thorena.erp-suppliers',
+  erpCityRates: 'thorena.erp-city-rates',
 };
 
 const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pagado', 'Pendiente', 'Anulado'];
@@ -215,13 +217,21 @@ function normalizeOrder(order) {
   const items = normalizeItems(order?.items);
   const customerContact = String(order?.customerNumber || order?.contactPhone || '');
   const subtotalBeforeDiscount = items.reduce((sum, item) => sum + (item.subtotalBeforeScale || item.subtotal), 0);
-  const total = items.reduce((sum, item) => sum + item.subtotal, 0);
-  const totalDiscountAmount = Math.max(0, subtotalBeforeDiscount - total);
+  const itemsTotal = items.reduce((sum, item) => sum + item.subtotal, 0);
+  const totalDiscountAmount = Math.max(0, subtotalBeforeDiscount - itemsTotal);
+  const dispatchRate = Math.max(0, Number(order?.dispatchRate) || 0);
+  const dispatchSurchargeRaw = Number(order?.dispatchSurcharge);
+  const dispatchSurcharge = Math.max(
+    0,
+    Number.isFinite(dispatchSurchargeRaw) ? dispatchSurchargeRaw : Math.round(itemsTotal * dispatchRate),
+  );
+  const normalizedItemsTotal = Math.max(0, Number(order?.itemsTotal) || itemsTotal);
+  const normalizedTotal = Math.max(0, Number(order?.total) || normalizedItemsTotal + dispatchSurcharge);
 
   return {
     code: String(order?.code || 'PED-0000'),
     createdAt: order?.createdAt || new Date().toISOString(),
-    saleChannel: order?.saleChannel === 'online' ? 'online' : 'terreno',
+    saleChannel: order?.saleChannel === 'online' ? 'online' : order?.saleChannel === 'oficina' ? 'oficina' : 'terreno',
     customerName: String(order?.customerName || ''),
     customerRut: String(order?.customerRut || ''),
     customerNumber: customerContact,
@@ -235,7 +245,11 @@ function normalizeOrder(order) {
     status,
     subtotalBeforeDiscount,
     totalDiscountAmount,
-    total,
+    itemsTotal: normalizedItemsTotal,
+    dispatchCity: String(order?.dispatchCity || order?.clientSnapshot?.zone || ''),
+    dispatchRate,
+    dispatchSurcharge,
+    total: normalizedTotal,
     items,
     clientSnapshot: order?.clientSnapshot
       ? {
@@ -834,11 +848,27 @@ function OrderCard({ order, onUpdateStatus }) {
         </div>
         <div>
           <span className="field-label">Origen de venta</span>
-          <p>{order.saleChannel === 'online' ? 'Venta Online' : 'Venta en Terreno'}</p>
+          <p>
+            {order.saleChannel === 'online'
+              ? 'Venta Online'
+              : order.saleChannel === 'oficina'
+                ? 'Venta Oficina'
+                : 'Venta en Terreno'}
+          </p>
         </div>
         <div>
           <span className="field-label">Deuda cliente</span>
           <p>{formatCurrency(order.clientSnapshot?.debt || 0)}</p>
+        </div>
+        <div>
+          <span className="field-label">Tarifa ciudad</span>
+          <p>
+            {order.dispatchCity || '-'} ({Math.round((order.dispatchRate || 0) * 100)}%)
+          </p>
+        </div>
+        <div>
+          <span className="field-label">Recargo despacho</span>
+          <p>{formatCurrency(order.dispatchSurcharge || 0)}</p>
         </div>
         <div>
           <span className="field-label">Total del pedido</span>
@@ -1180,6 +1210,7 @@ function App() {
   const [erpSales, setErpSales] = useState(() => loadErpModule(STORAGE_KEYS.erpSales, ERP_SALES));
   const [erpProductsFull, setErpProductsFull] = useState(() => loadErpModule(STORAGE_KEYS.erpProductsFull, ERP_PRODUCTS_FULL));
   const [erpSuppliers, setErpSuppliers] = useState(() => loadErpModule(STORAGE_KEYS.erpSuppliers, ERP_SUPPLIERS));
+  const [erpCityRates, setErpCityRates] = useState(() => loadErpModule(STORAGE_KEYS.erpCityRates, ERP_CITY_RATES));
 
   useLayoutEffect(() => {
     const nextResolvedTheme = getResolvedTheme(themeMode);
@@ -1264,6 +1295,10 @@ function App() {
   }, [erpSuppliers]);
 
   useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpCityRates, erpCityRates);
+  }, [erpCityRates]);
+
+  useEffect(() => {
     if (authenticated) {
       writeString(window.sessionStorage, STORAGE_KEYS.activeView, activeView);
     }
@@ -1321,6 +1356,7 @@ function App() {
             clients={clients}
             paymentMethods={ERP_PAYMENT_METHODS}
             volumeScales={erpScales}
+            cityRates={erpCityRates}
           />
         ) : activeView === 'pedidos' ? (
           <OrdersView orders={orders} setOrders={setOrders} />
@@ -1343,6 +1379,8 @@ function App() {
             setProductsFull={setErpProductsFull}
             suppliers={erpSuppliers}
             setSuppliers={setErpSuppliers}
+            cityRates={erpCityRates}
+            setCityRates={setErpCityRates}
           />
         ) : (
           <ProductsView products={products} setProducts={setProducts} />

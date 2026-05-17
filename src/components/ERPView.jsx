@@ -8,10 +8,27 @@ const TABS = [
   { id: 'compras', label: 'Compras' },
   { id: 'productos', label: 'Productos' },
   { id: 'ventas', label: 'Ventas' },
+  { id: 'tarifas-ciudad', label: 'Tarifas por ciudad' },
   { id: 'proveedores', label: 'Proveedores' },
 ];
 
-const CLIENT_TYPES = ['Negocio fijo', 'Mayorista', 'Minorista', 'Distribuidor', 'Cafeteria', 'Restaurant', 'Camping', 'Cabanas', 'Hotel/Hostal', 'Food Truck'];
+const CLIENT_TYPES = [
+  'Negocio fijo',
+  'Mayorista',
+  'Minorista',
+  'Distribuidor',
+  'Cafeteria',
+  'Restaurant',
+  'Camping',
+  'Cabanas',
+  'Hotel/Hostal',
+  'Food Truck',
+  'Minimarket',
+  'Provisiones',
+  'Panaderia',
+  'Pasteleria',
+  'Botilleria',
+];
 const VISIT_FREQUENCIES = ['Semanal', 'Quincenal', 'Mensual'];
 const CLIENT_STATUSES = ['Activo', 'Inactivo'];
 const ROUTE_SELLERS = ['Jorge', 'Ruta 2'];
@@ -149,6 +166,11 @@ const emptySupplierForm = {
   notes: '',
 };
 
+const emptyCityRateForm = {
+  city: '',
+  rate: '0',
+};
+
 function ChartBars({ items, valueFormat = formatCurrency }) {
   const maxValue = Math.max(1, ...items.map((item) => asNumber(item.value, 0)));
 
@@ -253,6 +275,8 @@ function ERPView({
   setProductsFull,
   suppliers,
   setSuppliers,
+  cityRates,
+  setCityRates,
 }) {
   const [tab, setTab] = useState('dashboard');
   const [feedback, setFeedback] = useState(null);
@@ -263,6 +287,7 @@ function ERPView({
   const [productForm, setProductForm] = useState(emptyProductForm);
   const [saleForm, setSaleForm] = useState(emptySaleForm);
   const [supplierForm, setSupplierForm] = useState(emptySupplierForm);
+  const [cityRateForm, setCityRateForm] = useState(emptyCityRateForm);
 
   const currentMonth = useMemo(() => new Date().toISOString().slice(0, 7), []);
 
@@ -369,6 +394,11 @@ function ERPView({
 
   const updateSupplierField = (key) => (event) => {
     setSupplierForm((current) => ({ ...current, [key]: event.target.value }));
+    setFeedback(null);
+  };
+
+  const updateCityRateField = (key) => (event) => {
+    setCityRateForm((current) => ({ ...current, [key]: event.target.value }));
     setFeedback(null);
   };
 
@@ -658,6 +688,48 @@ function ERPView({
     setSuppliers((current) => [newSupplier, ...current]);
     setSupplierForm(emptySupplierForm);
     setFeedback({ type: 'success', text: 'Proveedor agregado.' });
+  };
+
+  const handleAddCityRate = (event) => {
+    event.preventDefault();
+
+    const city = cityRateForm.city.trim();
+    if (!city) {
+      setFeedback({ type: 'error', text: 'Debes ingresar una ciudad.' });
+      return;
+    }
+
+    const rate = clamp(asNumber(cityRateForm.rate, 0), 0, 0.95);
+    const normalizedKey = city.toLowerCase();
+
+    setCityRates((current) => {
+      const existing = current.find((item) => String(item.city || '').trim().toLowerCase() === normalizedKey);
+
+      if (existing) {
+        return current.map((item) => (item.id === existing.id ? { ...item, city, rate } : item));
+      }
+
+      return [...current, { id: `city-${Date.now()}`, city, rate }];
+    });
+
+    setCityRateForm(emptyCityRateForm);
+    setFeedback({ type: 'success', text: 'Tarifa por ciudad guardada.' });
+  };
+
+  const handleCityRateInlineChange = (id, key, value) => {
+    setCityRates((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+        if (key === 'rate') {
+          return { ...item, rate: clamp(asNumber(value, 0), 0, 0.95) };
+        }
+        return { ...item, city: value };
+      }),
+    );
+  };
+
+  const handleDeleteCityRate = (id) => {
+    setCityRates((current) => current.filter((item) => item.id !== id));
   };
 
   const topProducts = salesByProduct.slice(0, 5);
@@ -1596,6 +1668,75 @@ function ERPView({
                       <td>{supplier.email || '-'}</td>
                       <td>{supplier.status || '-'}</td>
                       <td>{supplier.notes || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {tab === 'tarifas-ciudad' ? (
+        <div className="erp-content-layout">
+          <form className="panel erp-form" onSubmit={handleAddCityRate}>
+            <div className="panel-title">
+              <h3>Nueva tarifa de despacho</h3>
+              <p className="muted">Define el porcentaje adicional por ciudad para aplicar en ventas.</p>
+            </div>
+
+            <div className="form-grid">
+              <label className="field field-wide">
+                <span>Ciudad</span>
+                <input value={cityRateForm.city} onChange={updateCityRateField('city')} placeholder="Ej: Pucon" />
+              </label>
+              <label className="field">
+                <span>Tarifa (0-0.95)</span>
+                <input type="number" min="0" max="0.95" step="0.005" value={cityRateForm.rate} onChange={updateCityRateField('rate')} />
+              </label>
+            </div>
+
+            <button className="button button-primary" type="submit">
+              Guardar tarifa
+            </button>
+          </form>
+
+          <div className="panel erp-list-panel">
+            <div className="panel-title">
+              <h3>Tarifas por ciudad</h3>
+              <p className="muted">Estas tarifas se aplican en terreno, online y oficina.</p>
+            </div>
+
+            <div className="table-wrap">
+              <table className="items-table">
+                <thead>
+                  <tr>
+                    <th>Ciudad</th>
+                    <th>Tarifa</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {cityRates.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <input value={row.city || ''} onChange={(event) => handleCityRateInlineChange(row.id, 'city', event.target.value)} />
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          min="0"
+                          max="0.95"
+                          step="0.005"
+                          value={row.rate ?? 0}
+                          onChange={(event) => handleCityRateInlineChange(row.id, 'rate', event.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <button className="icon-button" type="button" onClick={() => handleDeleteCityRate(row.id)} aria-label={`Eliminar tarifa ${row.city || row.id}`}>
+                          x
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
