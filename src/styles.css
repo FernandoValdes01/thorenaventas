@@ -511,6 +511,82 @@ textarea:focus {
   gap: 12px;
 }
 
+.inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.inventory-card {
+  display: grid;
+  gap: 14px;
+  border-radius: 22px;
+  padding: 16px;
+  border: 1px solid var(--line);
+}
+
+.inventory-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.inventory-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.inventory-metrics strong {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.inventory-status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  border: 1px solid transparent;
+}
+
+.inventory-card-out {
+  background: color-mix(in srgb, #f95f5f 14%, var(--surface) 86%);
+  border-color: color-mix(in srgb, #e04545 45%, var(--line) 55%);
+}
+
+.inventory-card-out .inventory-status-chip {
+  background: color-mix(in srgb, #f95f5f 18%, white 82%);
+  border-color: color-mix(in srgb, #e04545 42%, var(--line) 58%);
+  color: #8c1f1f;
+}
+
+.inventory-card-low {
+  background: color-mix(in srgb, #ffd96b 16%, var(--surface) 84%);
+  border-color: color-mix(in srgb, #e1b73f 48%, var(--line) 52%);
+}
+
+.inventory-card-low .inventory-status-chip {
+  background: color-mix(in srgb, #ffe399 30%, white 70%);
+  border-color: color-mix(in srgb, #e1b73f 44%, var(--line) 56%);
+  color: #7c5700;
+}
+
+.inventory-card-ok {
+  background: color-mix(in srgb, #6ecf87 13%, var(--surface) 87%);
+  border-color: color-mix(in srgb, #52b26a 46%, var(--line) 54%);
+}
+
+.inventory-card-ok .inventory-status-chip {
+  background: color-mix(in srgb, #a0e1b0 28%, white 72%);
+  border-color: color-mix(in srgb, #52b26a 42%, var(--line) 58%);
+  color: #1f6935;
+}
+
 .product-price-stack {
   display: flex;
   flex-wrap: wrap;
@@ -943,6 +1019,10 @@ textarea:focus {
   grid-template-columns: 1fr;
 }
 
+.inventory-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .erp-content-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
@@ -977,6 +1057,11 @@ textarea:focus {
   }
 
   .product-builder {
+    grid-template-columns: 1fr;
+  }
+
+  .inventory-grid,
+  .inventory-metrics {
     grid-template-columns: 1fr;
   }
 

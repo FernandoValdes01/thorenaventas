@@ -65,6 +65,7 @@ export function normalizeProduct(raw = {}, index = 0) {
     name,
     category: normalizeText(raw.category ?? raw.categoria ?? 'General') || 'General',
     stock: normalizeInt(raw.stock ?? raw.quantity ?? raw.cantidad, 0),
+    stockMin: normalizeInt(raw.stockMin ?? raw.stock_minimo ?? raw.stockMinimo ?? raw.minStock, 0),
     basePrice: Math.max(0, Math.round(normalizeNumber(raw.basePrice ?? raw.price ?? raw.precio, 0))),
     offer: normalizeOffer(raw.offer ?? raw.oferta),
   };
@@ -97,6 +98,7 @@ export function mergeProductList(currentProducts, incomingRaw) {
     name: incoming.name,
     category: incoming.category,
     stock: existing.stock + incoming.stock,
+    stockMin: incoming.stockMin > 0 ? incoming.stockMin : existing.stockMin,
     basePrice: incoming.basePrice > 0 ? incoming.basePrice : existing.basePrice,
     offer: hasIncomingOffer ? incoming.offer : existing.offer,
   };
@@ -229,6 +231,7 @@ export async function parseProductsFromExcelFile(file) {
           name: getCellValue(row, ['nombre', 'name', 'producto', 'Producto']),
           category: getCellValue(row, ['categoria', 'category', 'Categoría', 'Categoria']) || 'General',
           stock: getCellValue(row, ['cantidad', 'quantity', 'stock', 'Stock']),
+          stockMin: getCellValue(row, ['stock minimo', 'stock mínimo', 'minimo', 'minimo stock', 'stock min', 'minimum stock']),
           basePrice: getCellValue(row, ['precio', 'price', 'Precio', 'Price']),
         },
         index,
