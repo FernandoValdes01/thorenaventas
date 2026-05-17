@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
-  APP_LOCATION,
   APP_NAME,
   APP_SUBTITLE,
   DEFAULT_SELLER,
@@ -10,6 +9,7 @@ import {
   logo,
 } from './data/appData';
 import { ERP_CLIENTS, ERP_PAYMENT_METHODS, ERP_PRODUCTS } from './data/erpSeed';
+import ERP_VOLUME_SCALES from './data/erpScales.json';
 import ProductsView from './components/ProductsView';
 import ERPView from './components/ERPView';
 import {
@@ -33,6 +33,9 @@ const STORAGE_KEYS = {
   clients: 'thorena.clients',
   spaces: 'thorena.spaces',
 };
+
+const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pagado', 'Pendiente', 'Anulado'];
+const ORDER_DETAIL_EXPAND_THRESHOLD = 4;
 
 const EMPTY_FORM = {
   customerName: '',
@@ -91,7 +94,14 @@ function normalizeItems(items) {
       const unitPrice = Math.max(0, Number(item?.unitPrice) || 0);
       const productName = String(item?.productName || '').trim();
       const basePrice = Math.max(0, Number(item?.basePrice ?? unitPrice) || unitPrice);
-      const discountPercent = Math.max(0, Number(item?.discountPercent) || 0);
+      const offerDiscountPercent = Math.max(0, Number(item?.offerDiscountPercent ?? item?.discountPercent) || 0);
+      const unitPriceBeforeScale = Math.max(0, Number(item?.unitPriceBeforeScale ?? unitPrice) || unitPrice);
+      const volumeDiscountRate = Math.max(0, Number(item?.volumeDiscountRate) || 0);
+      const volumeDiscountPercent = Math.max(0, Number(item?.volumeDiscountPercent) || Math.round(volumeDiscountRate * 100));
+      const volumeScaleLabel = String(item?.volumeScaleLabel || '').trim() || 'Sin escala';
+      const subtotalBeforeScale = Math.max(0, Number(item?.subtotalBeforeScale ?? unitPriceBeforeScale * quantity) || unitPriceBeforeScale * quantity);
+      const subtotal = Math.max(0, Number(item?.subtotal ?? unitPrice * quantity) || unitPrice * quantity);
+      const discountAmount = Math.max(0, Number(item?.discountAmount) || Math.max(0, subtotalBeforeScale - subtotal));
 
       if (!productName || !Number.isFinite(unitPrice)) {
         return null;
@@ -101,23 +111,35 @@ function normalizeItems(items) {
         productId: String(item?.productId || productName),
         productName,
         unitPrice,
+        unitPriceBeforeScale,
         basePrice,
-        discountPercent,
+        offerDiscountPercent,
+        volumeDiscountRate,
+        volumeDiscountPercent,
+        volumeScaleLabel,
+        subtotalBeforeScale,
+        discountAmount,
         quantity,
-        subtotal: unitPrice * quantity,
+        subtotal,
       };
     })
     .filter(Boolean);
 }
 
 function normalizeOrder(order) {
-  const status = order?.status === 'Terminado' ? 'Terminado' : 'Pendiente';
+  const rawStatus = String(order?.status || '').trim();
+  const mappedStatus = rawStatus === 'Terminado' ? 'Pagado' : rawStatus;
+  const status = ERP_ORDER_STATUSES.includes(mappedStatus) ? mappedStatus : 'Pendiente';
   const items = normalizeItems(order?.items);
   const customerContact = String(order?.customerNumber || order?.contactPhone || '');
+  const subtotalBeforeDiscount = items.reduce((sum, item) => sum + (item.subtotalBeforeScale || item.subtotal), 0);
+  const total = items.reduce((sum, item) => sum + item.subtotal, 0);
+  const totalDiscountAmount = Math.max(0, subtotalBeforeDiscount - total);
 
   return {
     code: String(order?.code || 'PED-0000'),
     createdAt: order?.createdAt || new Date().toISOString(),
+    saleChannel: order?.saleChannel === 'online' ? 'online' : 'terreno',
     customerName: String(order?.customerName || ''),
     customerRut: String(order?.customerRut || ''),
     customerNumber: customerContact,
@@ -129,8 +151,21 @@ function normalizeOrder(order) {
     sellerName: String(order?.sellerName || DEFAULT_SELLER.name),
     sellerRut: String(order?.sellerRut || DEFAULT_SELLER.rut),
     status,
-    total: items.reduce((sum, item) => sum + item.subtotal, 0),
+    subtotalBeforeDiscount,
+    totalDiscountAmount,
+    total,
     items,
+    clientSnapshot: order?.clientSnapshot
+      ? {
+          id: String(order.clientSnapshot.id || ''),
+          name: String(order.clientSnapshot.name || ''),
+          type: String(order.clientSnapshot.type || ''),
+          zone: String(order.clientSnapshot.zone || ''),
+          sector: String(order.clientSnapshot.sector || ''),
+          creditEnabled: Boolean(order.clientSnapshot.creditEnabled),
+          debt: Math.max(0, Number(order.clientSnapshot.debt) || 0),
+        }
+      : null,
     checklist: normalizeChecklist(order?.checklist),
     showReceipt: Boolean(order?.showReceipt),
   };
@@ -642,11 +677,28 @@ function SalesView({ orders, setOrders }) {
   );
 }
 
-function OrderCard({ order, onToggleChecklist, onToggleReceipt, onFinishOrder }) {
-  const completed = order.status === 'Terminado';
+function getStatusBadgeClass(status) {
+  if (status === 'Pagado' || status === 'Despachado') {
+    return 'badge badge-success';
+  }
+
+  if (status === 'Anulado') {
+    return 'badge badge-warning';
+  }
+
+  return 'badge badge-warning';
+}
+
+function OrderCard({ order, onUpdateStatus }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasManyItems = order.items.length > ORDER_DETAIL_EXPAND_THRESHOLD;
+  const visibleItems = hasManyItems && !expanded ? order.items.slice(0, ORDER_DETAIL_EXPAND_THRESHOLD) : order.items;
+  const hiddenItemsCount = Math.max(0, order.items.length - visibleItems.length);
+  const totalUnits = order.items.reduce((sum, item) => sum + item.quantity, 0);
+  const lineDiscountTotal = order.items.reduce((sum, item) => sum + (item.discountAmount || 0), 0);
 
   return (
-    <article className={completed ? 'order-card panel order-card-done' : 'order-card panel'}>
+    <article className={order.status === 'Pagado' ? 'order-card panel order-card-done' : 'order-card panel'}>
       <div className="order-head">
         <div>
           <p className="eyebrow">{order.code}</p>
@@ -654,9 +706,7 @@ function OrderCard({ order, onToggleChecklist, onToggleReceipt, onFinishOrder })
           <p className="muted">{formatDateTime(order.createdAt)}</p>
         </div>
 
-        <div className={completed ? 'badge badge-success' : 'badge badge-warning'}>
-          {order.status}
-        </div>
+        <div className={getStatusBadgeClass(order.status)}>{order.status}</div>
       </div>
 
       <div className="order-grid">
@@ -665,7 +715,7 @@ function OrderCard({ order, onToggleChecklist, onToggleReceipt, onFinishOrder })
           <p>{order.customerRut || '-'}</p>
         </div>
         <div>
-          <span className="field-label">Número de cliente / Teléfono o contacto</span>
+          <span className="field-label">Numero cliente / contacto</span>
           <p>{getCustomerContact(order)}</p>
         </div>
         <div>
@@ -673,16 +723,26 @@ function OrderCard({ order, onToggleChecklist, onToggleReceipt, onFinishOrder })
           <p>{order.paymentMethod || '-'}</p>
         </div>
         <div>
-          <span className="field-label">Dirección de despacho</span>
+          <span className="field-label">Direccion de despacho</span>
           <p>{order.deliveryAddress || '-'}</p>
         </div>
         <div>
-          <span className="field-label">Vendedor</span>
-          <p>{order.sellerName || '-'}</p>
+          <span className="field-label">Tipo de cliente</span>
+          <p>{order.clientSnapshot?.type || '-'}</p>
         </div>
         <div>
-          <span className="field-label">RUT vendedor</span>
-          <p>{order.sellerRut || '-'}</p>
+          <span className="field-label">Zona / Sector</span>
+          <p>
+            {order.clientSnapshot?.zone || '-'} / {order.clientSnapshot?.sector || '-'}
+          </p>
+        </div>
+        <div>
+          <span className="field-label">Origen de venta</span>
+          <p>{order.saleChannel === 'online' ? 'Venta Online' : 'Venta en Terreno'}</p>
+        </div>
+        <div>
+          <span className="field-label">Deuda cliente</span>
+          <p>{formatCurrency(order.clientSnapshot?.debt || 0)}</p>
         </div>
         <div>
           <span className="field-label">Total del pedido</span>
@@ -697,226 +757,135 @@ function OrderCard({ order, onToggleChecklist, onToggleReceipt, onFinishOrder })
         </div>
       ) : null}
 
-      <div className="checklist-block">
-        <div className="panel-title compact-title">
-          <h4>Checklist</h4>
-        </div>
-
-        <div className="checklist-grid">
-          {CHECKLIST_ITEMS.map((item) => (
-            <label className="check-item" key={item.key}>
-              <input
-                type="checkbox"
-                checked={Boolean(order.checklist[item.key])}
-                onChange={(event) => onToggleChecklist(order.code, item.key, event.target.checked)}
-              />
-              <span>{item.label}</span>
-            </label>
-          ))}
-        </div>
+      <div className="panel-title compact-title">
+        <h4>Detalle del pedido</h4>
+        <p className="muted">
+          {order.items.length} items · {totalUnits} unidades · descuento por producto: {formatCurrency(lineDiscountTotal)}
+        </p>
       </div>
 
-      <div className="order-actions">
-        <button className="button button-secondary" type="button" onClick={() => onToggleReceipt(order.code)}>
-          {order.showReceipt ? 'Ocultar boleta' : 'Mostrar boleta'}
-        </button>
-
-        {!completed ? (
-          <button className="button button-primary" type="button" onClick={() => onFinishOrder(order.code)}>
-            Marcar como terminado
-          </button>
-        ) : (
-          <span className="done-note">Pedido terminado</span>
-        )}
-      </div>
-
-      {order.showReceipt ? <Receipt order={order} /> : null}
-    </article>
-  );
-}
-
-function Receipt({ order }) {
-  return (
-    <section className="receipt">
-      <div className="receipt-header">
-        <div>
-          <h4>{APP_NAME}</h4>
-          <p>{APP_LOCATION}</p>
-        </div>
-        <div className="receipt-code">{order.code}</div>
-      </div>
-
-      <div className="receipt-meta">
-        <div>
-          <span className="field-label">Fecha</span>
-          <p>{formatDateTime(order.createdAt)}</p>
-        </div>
-        <div>
-          <span className="field-label">Cliente</span>
-          <p>{order.customerName || '-'}</p>
-        </div>
-        <div>
-          <span className="field-label">RUT cliente</span>
-          <p>{order.customerRut || '-'}</p>
-        </div>
-        <div>
-          <span className="field-label">Número de cliente / Teléfono o contacto</span>
-          <p>{getCustomerContact(order)}</p>
-        </div>
-        <div>
-          <span className="field-label">Metodo de pago</span>
-          <p>{order.paymentMethod || '-'}</p>
-        </div>
-        <div>
-          <span className="field-label">Dirección</span>
-          <p>{order.deliveryAddress || '-'}</p>
-        </div>
-        <div>
-          <span className="field-label">Vendedor</span>
-          <p>{order.sellerName || '-'}</p>
-        </div>
-        <div>
-          <span className="field-label">RUT vendedor</span>
-          <p>{order.sellerRut || '-'}</p>
-        </div>
-      </div>
-
-      <div className="receipt-table-wrap">
-        <table className="receipt-table">
+      <div className="table-wrap">
+        <table className="items-table">
           <thead>
             <tr>
               <th>Producto</th>
-              <th>Cantidad</th>
-              <th>Precio unitario</th>
+              <th>Cant.</th>
+              <th>Escala</th>
+              <th>Desc. linea</th>
+              <th>Unitario</th>
               <th>Subtotal</th>
             </tr>
           </thead>
           <tbody>
-            {order.items.map((item) => (
+            {visibleItems.map((item) => (
               <tr key={item.productId}>
                 <td>{item.productName}</td>
                 <td>{item.quantity}</td>
-                <td>{formatCurrency(item.unitPrice)}</td>
-                <td>{formatCurrency(item.subtotal)}</td>
+                <td>
+                  {item.volumeScaleLabel || 'Sin escala'} ({Math.max(0, Number(item.volumeDiscountPercent) || 0)}%)
+                </td>
+                <td>{item.discountAmount > 0 ? `-${formatCurrency(item.discountAmount)}` : '-'}</td>
+                <td>
+                  {item.unitPriceBeforeScale > item.unitPrice ? <span className="strike-price">{formatCurrency(item.unitPriceBeforeScale)}</span> : null}
+                  <div>{formatCurrency(item.unitPrice)}</div>
+                </td>
+                <td>
+                  {item.subtotalBeforeScale > item.subtotal ? <span className="strike-price">{formatCurrency(item.subtotalBeforeScale)}</span> : null}
+                  <div>{formatCurrency(item.subtotal)}</div>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      <div className="receipt-total">
-        <span>Total final</span>
-        <strong>{formatCurrency(order.total)}</strong>
-      </div>
+      <div className="order-actions">
+        {hasManyItems ? (
+          <button className="button button-secondary" type="button" onClick={() => setExpanded((current) => !current)}>
+            {expanded ? 'Ocultar detalle' : `Ver detalle completo (+${hiddenItemsCount})`}
+          </button>
+        ) : null}
 
-      <p className="receipt-foot">Documento referencial generado para mockup MVP</p>
-    </section>
+        <label className="field status-select-field">
+          <span>Estado ERP</span>
+          <select value={order.status} onChange={(event) => onUpdateStatus(order.code, event.target.value)}>
+            {ERP_ORDER_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+    </article>
   );
 }
 
 function OrdersView({ orders, setOrders }) {
   const ordered = [...orders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  const pendingOrders = ordered.filter((order) => order.status !== 'Terminado');
-  const finishedOrders = ordered.filter((order) => order.status === 'Terminado');
 
-  const toggleChecklist = (code, key, checked) => {
+  const updateStatus = (code, nextStatus) => {
+    if (!ERP_ORDER_STATUSES.includes(nextStatus)) {
+      return;
+    }
+
     setOrders((current) =>
       current.map((order) =>
         order.code === code
           ? {
               ...order,
-              checklist: {
-                ...order.checklist,
-                [key]: checked,
-              },
+              status: nextStatus,
             }
           : order,
       ),
     );
   };
 
-  const toggleReceipt = (code) => {
-    setOrders((current) =>
-      current.map((order) =>
-        order.code === code
-          ? {
-              ...order,
-              showReceipt: !order.showReceipt,
-            }
-          : order,
-      ),
-    );
-  };
-
-  const finishOrder = (code) => {
-    setOrders((current) =>
-      current.map((order) =>
-        order.code === code
-          ? {
-              ...order,
-              status: 'Terminado',
-            }
-          : order,
-      ),
-    );
-  };
+  const statusSummary = ERP_ORDER_STATUSES.map((status) => ({
+    status,
+    count: ordered.filter((order) => order.status === status).length,
+  }));
 
   return (
     <section className="screen">
       <div className="screen-heading">
         <p className="eyebrow">Pedidos</p>
-        <h2>Gestión de pedidos</h2>
-        <p className="muted">Revisa pedidos, marca checklist y cierra los que ya están listos.</p>
+        <h2>Seguimiento de pedidos ERP</h2>
+        <p className="muted">Gestiona estado, cliente y detalle con descuentos por producto.</p>
       </div>
 
       {ordered.length === 0 ? (
         <div className="panel empty-orders">
-          <h3>No hay pedidos generados todavía</h3>
+          <h3>No hay pedidos generados todavia</h3>
           <p className="muted">Vuelve a Ventas para crear el primero.</p>
         </div>
       ) : (
         <div className="orders-groups">
-          {pendingOrders.length > 0 ? (
-            <section className="orders-group">
-              <div className="section-heading compact-section-heading">
-                <h3>Pendientes</h3>
-                <p className="muted">Pedidos que aún están en proceso.</p>
-              </div>
+          <section className="orders-group">
+            <div className="section-heading compact-section-heading">
+              <h3>Resumen por estado</h3>
+              <p className="muted">Estados ERP disponibles para todos los pedidos.</p>
+            </div>
+            <div className="status-summary-list">
+              {statusSummary.map((row) => (
+                <span key={row.status} className="offer-chip">
+                  {row.status}: {row.count}
+                </span>
+              ))}
+            </div>
+          </section>
 
-              <div className="orders-list">
-                {pendingOrders.map((order) => (
-                  <OrderCard
-                    key={order.code}
-                    order={order}
-                    onToggleChecklist={toggleChecklist}
-                    onToggleReceipt={toggleReceipt}
-                    onFinishOrder={finishOrder}
-                  />
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          {finishedOrders.length > 0 ? (
-            <section className="orders-group">
-              <div className="section-heading compact-section-heading">
-                <h3>Terminados</h3>
-                <p className="muted">Pedidos ya cerrados y listos.</p>
-              </div>
-
-              <div className="orders-list">
-                {finishedOrders.map((order) => (
-                  <OrderCard
-                    key={order.code}
-                    order={order}
-                    onToggleChecklist={toggleChecklist}
-                    onToggleReceipt={toggleReceipt}
-                    onFinishOrder={finishOrder}
-                  />
-                ))}
-              </div>
-            </section>
-          ) : null}
+          <section className="orders-group">
+            <div className="section-heading compact-section-heading">
+              <h3>Listado completo</h3>
+              <p className="muted">Visualiza los pedidos y ajusta su estado cuando corresponda.</p>
+            </div>
+            <div className="orders-list">
+              {ordered.map((order) => (
+                <OrderCard key={order.code} order={order} onUpdateStatus={updateStatus} />
+              ))}
+            </div>
+          </section>
         </div>
       )}
     </section>
@@ -1068,6 +1037,7 @@ function App() {
             setOrders={setOrders}
             clients={clients}
             paymentMethods={ERP_PAYMENT_METHODS}
+            volumeScales={ERP_VOLUME_SCALES}
           />
         ) : activeView === 'pedidos' ? (
           <OrdersView orders={orders} setOrders={setOrders} />

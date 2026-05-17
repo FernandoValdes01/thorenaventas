@@ -1,15 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
-import { DEFAULT_SELLER, CHECKLIST_ITEMS } from '../data/appData';
-import {
-  buildProductOptionLabel,
-  getActiveOffer,
-  getCurrentPrice,
-} from '../lib/catalog';
+import { DEFAULT_SELLER } from '../data/appData';
+import { buildProductOptionLabel, getActiveOffer, getCurrentPrice } from '../lib/catalog';
 
 const EMPTY_FORM = {
   clientId: '',
   paymentMethod: '',
   observations: '',
+};
+
+const SALE_CHANNELS = {
+  terreno: {
+    label: 'Venta en Terreno',
+    initialStatus: 'Pedido',
+  },
+  online: {
+    label: 'Venta Online',
+    initialStatus: 'Cotizado',
+  },
 };
 
 const currencyFormatter = new Intl.NumberFormat('es-CL', {
@@ -18,14 +25,9 @@ const currencyFormatter = new Intl.NumberFormat('es-CL', {
   maximumFractionDigits: 0,
 });
 
-const dateTimeFormatter = new Intl.DateTimeFormat('es-CL', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-});
-
-const formatDateTime = (value) => dateTimeFormatter.format(new Date(value));
-
 const formatMoney = (value) => currencyFormatter.format(value);
+const formatRate = (rate) => `${Math.round(rate * 100)}%`;
+const roundMoney = (value) => Math.max(0, Math.round(value));
 
 const getProductById = (products, productId) => products.find((product) => product.id === productId) || null;
 
@@ -38,13 +40,74 @@ const createInitialDraft = (products) => {
   };
 };
 
-function SalesView({ products, setProducts, orders, setOrders, clients, paymentMethods }) {
+const normalizeScales = (volumeScales = []) =>
+  volumeScales
+    .map((scale) => ({
+      id: String(scale?.id || ''),
+      label: String(scale?.label || '').trim() || 'Escala',
+      minQuantity: Math.max(1, Number(scale?.minQuantity) || 1),
+      maxQuantity: Math.max(1, Number(scale?.maxQuantity) || 1),
+      discountRate: Math.max(0, Number(scale?.discountRate) || 0),
+    }))
+    .sort((a, b) => a.minQuantity - b.minQuantity);
+
+const getScaleByQuantity = (quantity, scales) => {
+  if (!scales.length) {
+    return {
+      id: 'default',
+      label: 'Sin escala',
+      minQuantity: 1,
+      maxQuantity: Number.POSITIVE_INFINITY,
+      discountRate: 0,
+    };
+  }
+
+  const match = scales.find((scale) => quantity >= scale.minQuantity && quantity <= scale.maxQuantity);
+
+  if (match) {
+    return match;
+  }
+
+  return scales[scales.length - 1];
+};
+
+const buildPricedItem = (product, quantity, scales) => {
+  const activeOffer = getActiveOffer(product);
+  const unitPriceBeforeScale = getCurrentPrice(product);
+  const appliedScale = getScaleByQuantity(quantity, scales);
+  const volumeDiscountRate = Math.max(0, appliedScale.discountRate || 0);
+  const unitPrice = roundMoney(unitPriceBeforeScale * (1 - volumeDiscountRate));
+  const subtotalBeforeScale = roundMoney(unitPriceBeforeScale * quantity);
+  const subtotal = roundMoney(unitPrice * quantity);
+  const discountAmount = Math.max(0, subtotalBeforeScale - subtotal);
+
+  return {
+    productId: product.id,
+    productName: product.name,
+    quantity,
+    basePrice: product.basePrice,
+    offerDiscountPercent: activeOffer?.discountPercent || 0,
+    unitPriceBeforeScale,
+    unitPrice,
+    subtotalBeforeScale,
+    subtotal,
+    volumeScaleId: appliedScale.id,
+    volumeScaleLabel: appliedScale.label,
+    volumeDiscountRate,
+    volumeDiscountPercent: Math.round(volumeDiscountRate * 100),
+    discountAmount,
+  };
+};
+
+function SalesView({ products, setProducts, orders, setOrders, clients, paymentMethods, volumeScales }) {
+  const [saleChannel, setSaleChannel] = useState('terreno');
   const [form, setForm] = useState(EMPTY_FORM);
   const [draft, setDraft] = useState(() => createInitialDraft(products));
   const [items, setItems] = useState([]);
   const [feedback, setFeedback] = useState(null);
   const [errors, setErrors] = useState([]);
 
+  const normalizedScales = useMemo(() => normalizeScales(volumeScales), [volumeScales]);
   const availableProducts = useMemo(() => products.filter((product) => product.stock > 0), [products]);
   const availablePaymentMethods = useMemo(() => paymentMethods || [], [paymentMethods]);
   const activeClients = useMemo(
@@ -55,7 +118,13 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
     () => activeClients.find((client) => client.id === form.clientId) || null,
     [activeClients, form.clientId],
   );
+
+  const subtotalBeforeDiscount = useMemo(
+    () => items.reduce((sum, item) => sum + (item.subtotalBeforeScale || item.subtotal), 0),
+    [items],
+  );
   const total = useMemo(() => items.reduce((sum, item) => sum + item.subtotal, 0), [items]);
+  const totalDiscountAmount = useMemo(() => Math.max(0, subtotalBeforeDiscount - total), [subtotalBeforeDiscount, total]);
 
   useEffect(() => {
     if (!availableProducts.length) {
@@ -105,47 +174,28 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
     }
 
     if (!Number.isInteger(quantity) || quantity < 1) {
-      setErrors(['La cantidad debe ser un número entero mayor que 0.']);
-      return;
-    }
-
-    if (quantity > product.stock) {
-      setErrors([`Solo hay ${product.stock} unidades disponibles de ${product.name}.`]);
+      setErrors(['La cantidad debe ser un numero entero mayor que 0.']);
       return;
     }
 
     setErrors([]);
 
-    const activeOffer = getActiveOffer(product);
-    const unitPrice = getCurrentPrice(product);
-
     setItems((current) => {
       const existing = current.find((item) => item.productId === product.id);
+      const nextQuantity = (existing?.quantity || 0) + quantity;
 
-      if (existing) {
-        return current.map((item) =>
-          item.productId === product.id
-            ? {
-                ...item,
-                quantity: item.quantity + quantity,
-                subtotal: (item.quantity + quantity) * item.unitPrice,
-              }
-            : item,
-        );
+      if (nextQuantity > product.stock) {
+        setErrors([`Solo hay ${product.stock} unidades disponibles de ${product.name}.`]);
+        return current;
       }
 
-      return [
-        ...current,
-        {
-          productId: product.id,
-          productName: product.name,
-          unitPrice,
-          basePrice: product.basePrice,
-          discountPercent: activeOffer?.discountPercent || 0,
-          quantity,
-          subtotal: unitPrice * quantity,
-        },
-      ];
+      const pricedItem = buildPricedItem(product, nextQuantity, normalizedScales);
+
+      if (existing) {
+        return current.map((item) => (item.productId === product.id ? pricedItem : item));
+      }
+
+      return [...current, pricedItem];
     });
 
     setDraft((current) => ({ ...current, quantity: 1 }));
@@ -179,9 +229,11 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
       }, 0) + 1,
     ).padStart(4, '0')}`;
 
+    const initialStatus = SALE_CHANNELS[saleChannel]?.initialStatus || 'Pedido';
     const newOrder = {
       code,
       createdAt: new Date().toISOString(),
+      saleChannel,
       customerName: selectedClient?.name || '',
       customerRut: selectedClient?.rut || '',
       customerNumber: selectedClient?.phone || selectedClient?.contact || '',
@@ -203,14 +255,11 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
         : null,
       sellerName: DEFAULT_SELLER.name,
       sellerRut: DEFAULT_SELLER.rut,
-      status: 'Pendiente',
+      status: initialStatus,
+      subtotalBeforeDiscount,
+      totalDiscountAmount,
       total,
       items,
-      checklist: CHECKLIST_ITEMS.reduce((acc, item) => {
-        acc[item.key] = false;
-        return acc;
-      }, {}),
-      showReceipt: false,
     };
 
     setOrders((current) => [...current, newOrder]);
@@ -230,7 +279,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
       }),
     );
 
-    setFeedback({ type: 'success', text: `Pedido generado correctamente. Código ${code}.` });
+    setFeedback({ type: 'success', text: `Pedido generado correctamente. Codigo ${code} en estado ${initialStatus}.` });
     setErrors([]);
     setForm(EMPTY_FORM);
     setDraft(createInitialDraft(products));
@@ -241,9 +290,24 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
     <section className="screen">
       <div className="screen-heading">
         <p className="eyebrow">Ventas</p>
-        <h2>Crear pedido en terreno</h2>
-        <p className="muted">Completa los datos, agrega productos y genera el pedido para enviarlo a gestión.</p>
+        <h2>Crear pedido comercial</h2>
+        <p className="muted">Elige cliente, metodo de pago y productos para generar el pedido.</p>
       </div>
+
+      <div className="erp-tabs">
+        {Object.entries(SALE_CHANNELS).map(([key, channel]) => (
+          <button
+            key={key}
+            type="button"
+            className={saleChannel === key ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => setSaleChannel(key)}
+          >
+            {channel.label}
+          </button>
+        ))}
+      </div>
+
+      <p className="muted">Estado inicial: {SALE_CHANNELS[saleChannel]?.initialStatus || 'Pedido'}.</p>
 
       {feedback ? (
         <div className={`notice notice-${feedback.type}`} role="status">
@@ -265,7 +329,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
         <form id="sales-form" className="panel sales-panel" onSubmit={handleGenerateOrder}>
           <div className="panel-title">
             <h3>Datos del pedido</h3>
-            <p className="muted">Información del cliente para construir el pedido interno.</p>
+            <p className="muted">El sistema toma automaticamente los datos del cliente seleccionado.</p>
           </div>
 
           <div className="form-grid">
@@ -303,7 +367,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
 
           <div className="panel-title">
             <h3>Agregar productos</h3>
-            <p className="muted">Selecciona un producto y suma cantidades al pedido.</p>
+            <p className="muted">La escala de volumen se aplica automaticamente por cantidad de cada producto.</p>
           </div>
 
           <div className="product-builder">
@@ -340,12 +404,12 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
         <aside className="panel cart-panel">
           <div className="panel-title">
             <h3>Productos agregados</h3>
-            <p className="muted">Revisa, elimina y genera el pedido.</p>
+            <p className="muted">Revisa descuentos por escala y genera el pedido.</p>
           </div>
 
           {items.length === 0 ? (
             <div className="empty-state empty-state-inline">
-              <p>No hay productos agregados todavía.</p>
+              <p>No hay productos agregados todavia.</p>
             </div>
           ) : (
             <div className="table-wrap">
@@ -354,6 +418,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
                   <tr>
                     <th>Producto</th>
                     <th>Cant.</th>
+                    <th>Escala</th>
                     <th>Unitario</th>
                     <th>Subtotal</th>
                     <th />
@@ -365,12 +430,30 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
                       <td>
                         <div className="item-name-stack">
                           <strong>{item.productName}</strong>
-                          {item.discountPercent > 0 ? <span className="offer-chip offer-chip-active">{item.discountPercent}% desc.</span> : null}
+                          <div className="item-name-stack">
+                            {item.offerDiscountPercent > 0 ? (
+                              <span className="offer-chip offer-chip-active">Oferta {item.offerDiscountPercent}%</span>
+                            ) : null}
+                            {item.volumeDiscountPercent > 0 ? (
+                              <span className="offer-chip offer-chip-active">Escala {item.volumeDiscountPercent}%</span>
+                            ) : (
+                              <span className="offer-chip">Sin descuento por escala</span>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td>{item.quantity}</td>
-                      <td>{formatMoney(item.unitPrice)}</td>
-                      <td>{formatMoney(item.subtotal)}</td>
+                      <td>
+                        {item.volumeScaleLabel} ({formatRate(item.volumeDiscountRate)})
+                      </td>
+                      <td>
+                        {item.unitPriceBeforeScale > item.unitPrice ? <span className="strike-price">{formatMoney(item.unitPriceBeforeScale)}</span> : null}
+                        <div>{formatMoney(item.unitPrice)}</div>
+                      </td>
+                      <td>
+                        {item.subtotalBeforeScale > item.subtotal ? <span className="strike-price">{formatMoney(item.subtotalBeforeScale)}</span> : null}
+                        <div>{formatMoney(item.subtotal)}</div>
+                      </td>
                       <td>
                         <button className="icon-button" type="button" onClick={() => handleRemoveItem(item.productId)} aria-label={`Eliminar ${item.productName}`}>
                           ×
@@ -384,7 +467,10 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
           )}
 
           <div className="total-box">
-            <span>Total general</span>
+            <div>
+              <span>Total general</span>
+              {totalDiscountAmount > 0 ? <p className="muted">Descuento por escala aplicado: -{formatMoney(totalDiscountAmount)}</p> : null}
+            </div>
             <strong>{formatMoney(total)}</strong>
           </div>
 

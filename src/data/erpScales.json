@@ -1,0 +1,44 @@
+[
+  {
+    "id": "minorista",
+    "label": "Minorista",
+    "minQuantity": 1,
+    "maxQuantity": 9,
+    "discountRate": 0
+  },
+  {
+    "id": "negocio-pequeno",
+    "label": "Negocio pequeno",
+    "minQuantity": 10,
+    "maxQuantity": 29,
+    "discountRate": 0.05
+  },
+  {
+    "id": "mayorista-base",
+    "label": "Mayorista base",
+    "minQuantity": 30,
+    "maxQuantity": 49,
+    "discountRate": 0.08
+  },
+  {
+    "id": "mayorista-fuerte",
+    "label": "Mayorista fuerte",
+    "minQuantity": 50,
+    "maxQuantity": 99,
+    "discountRate": 0.12
+  },
+  {
+    "id": "distribuidor",
+    "label": "Distribuidor",
+    "minQuantity": 100,
+    "maxQuantity": 299,
+    "discountRate": 0.15
+  },
+  {
+    "id": "especial",
+    "label": "Especial",
+    "minQuantity": 300,
+    "maxQuantity": 9999,
+    "discountRate": 0.18
+  }
+]
