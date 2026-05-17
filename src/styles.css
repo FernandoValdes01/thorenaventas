@@ -236,6 +236,10 @@ textarea:focus {
 }
 
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   border: 1px solid transparent;
   border-radius: 999px;
   min-height: 46px;
@@ -509,6 +513,111 @@ textarea:focus {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.inventory-card {
+  display: grid;
+  gap: 14px;
+  border-radius: 22px;
+  padding: 16px;
+  border: 1px solid var(--line);
+}
+
+.inventory-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.inventory-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.inventory-metrics strong {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.inventory-status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  border: 1px solid transparent;
+}
+
+.inventory-card-out {
+  background: color-mix(in srgb, #f95f5f 14%, var(--surface) 86%);
+  border-color: color-mix(in srgb, #e04545 45%, var(--line) 55%);
+}
+
+.inventory-card-out .inventory-status-chip {
+  background: color-mix(in srgb, #f95f5f 18%, white 82%);
+  border-color: color-mix(in srgb, #e04545 42%, var(--line) 58%);
+  color: #8c1f1f;
+}
+
+.inventory-card-low {
+  background: color-mix(in srgb, #ffd96b 16%, var(--surface) 84%);
+  border-color: color-mix(in srgb, #e1b73f 48%, var(--line) 52%);
+}
+
+.inventory-card-low .inventory-status-chip {
+  background: color-mix(in srgb, #ffe399 30%, white 70%);
+  border-color: color-mix(in srgb, #e1b73f 44%, var(--line) 56%);
+  color: #7c5700;
+}
+
+.inventory-card-ok {
+  background: color-mix(in srgb, #6ecf87 13%, var(--surface) 87%);
+  border-color: color-mix(in srgb, #52b26a 46%, var(--line) 54%);
+}
+
+.inventory-card-ok .inventory-status-chip {
+  background: color-mix(in srgb, #a0e1b0 28%, white 72%);
+  border-color: color-mix(in srgb, #52b26a 42%, var(--line) 58%);
+  color: #1f6935;
+}
+
+.client-card {
+  display: grid;
+  gap: 14px;
+  border-radius: 22px;
+  padding: 16px;
+}
+
+.client-card .inventory-metrics strong {
+  font-size: 1rem;
+}
+
+.debt-chip-pending {
+  background: color-mix(in srgb, #ffe399 30%, white 70%);
+  border-color: color-mix(in srgb, #e1b73f 44%, var(--line) 56%);
+  color: #7c5700;
+}
+
+.debt-chip-overdue {
+  background: color-mix(in srgb, #f95f5f 18%, white 82%);
+  border-color: color-mix(in srgb, #e04545 42%, var(--line) 58%);
+  color: #8c1f1f;
+}
+
+.debt-chip-paid {
+  background: color-mix(in srgb, #a0e1b0 28%, white 72%);
+  border-color: color-mix(in srgb, #52b26a 42%, var(--line) 58%);
+  color: #1f6935;
 }
 
 .product-price-stack {
@@ -830,6 +939,39 @@ textarea:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  align-items: end;
+}
+
+.status-select-field {
+  min-width: 240px;
+}
+
+.status-select-field select:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.status-summary-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.orders-heading-compact {
+  gap: 6px;
+}
+
+.status-lock-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.82rem;
 }
 
 .done-note {
@@ -906,9 +1048,13 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .products-grid {
-    grid-template-columns: 1fr;
-  }
+.products-grid {
+  grid-template-columns: 1fr;
+}
+
+.inventory-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 }
 
 @media (max-width: 760px) {
@@ -932,6 +1078,11 @@ textarea:focus {
   }
 
   .product-builder {
+    grid-template-columns: 1fr;
+  }
+
+  .inventory-grid,
+  .inventory-metrics {
     grid-template-columns: 1fr;
   }
 
@@ -959,6 +1110,11 @@ textarea:focus {
   .product-card-head {
     flex-direction: column;
   }
+
+  .erp-grid,
+  .erp-content-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 480px) {
@@ -972,5 +1128,176 @@ textarea:focus {
 
   .brand-mark {
     width: 72px;
+  }
+}
+
+.erp-tabs {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0 16px;
+  flex-wrap: wrap;
+}
+
+.erp-content-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 16px;
+}
+
+.erp-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.erp-form,
+.erp-list-panel {
+  border-radius: 24px;
+  padding: 18px;
+}
+
+.erp-dashboard-layout {
+  display: grid;
+  gap: 14px;
+}
+
+.erp-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.erp-metric-card {
+  border-radius: 16px;
+  padding: 12px 14px;
+  min-height: 118px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--brand) 10%, var(--line) 90%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 94%, var(--brand-soft) 6%) 0%, var(--surface-strong) 100%);
+}
+
+.erp-metric-title {
+  margin: 0;
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.erp-metric-value {
+  margin: 0;
+  font-size: clamp(1.1rem, 1.8vw, 1.45rem);
+  line-height: 1.05;
+  color: var(--text);
+}
+
+.erp-dashboard-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.erp-chart-panel {
+  border-radius: 22px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.chart-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.chart-row {
+  display: grid;
+  gap: 4px;
+}
+
+.chart-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.9rem;
+}
+
+.chart-row-head strong {
+  color: var(--text);
+}
+
+.chart-track {
+  width: 100%;
+  height: 11px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-soft) 48%, var(--surface-strong) 52%);
+  overflow: hidden;
+}
+
+.chart-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand) 0%, color-mix(in srgb, var(--brand) 62%, white 38%) 100%);
+}
+
+.chart-line-wrap {
+  display: grid;
+  gap: 8px;
+}
+
+.chart-line-svg {
+  width: 100%;
+  height: 180px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 92%, var(--brand-soft) 8%) 0%, var(--surface-strong) 100%);
+}
+
+.chart-line-labels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(24px, 1fr));
+  gap: 8px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.erp-wide-table input,
+.erp-wide-table select {
+  min-width: 82px;
+  padding: 8px 10px;
+  border-radius: 12px;
+}
+
+@media (max-width: 1080px) {
+  .erp-metrics-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .erp-dashboard-charts {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .erp-content-layout,
+  .erp-dashboard-charts {
+    grid-template-columns: 1fr;
+  }
+
+  .erp-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .erp-metrics-grid {
+    grid-template-columns: 1fr;
   }
 }

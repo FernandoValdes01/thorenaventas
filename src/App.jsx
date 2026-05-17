@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
-  APP_LOCATION,
   APP_NAME,
   APP_SUBTITLE,
   DEFAULT_SELLER,
@@ -9,7 +8,21 @@ import {
   PRODUCTS,
   logo,
 } from './data/appData';
+import { ERP_CLIENTS, ERP_PAYMENT_METHODS, ERP_PRODUCTS } from './data/erpSeed';
+import { ERP_COBRANZAS } from './data/erpCobranzas';
+import { ERP_CLIENT_LAST_PURCHASE } from './data/erpClientLastPurchase';
+import ERP_VOLUME_SCALES from './data/erpScales.json';
+import {
+  ERP_PRODUCTS_FULL,
+  ERP_PURCHASES,
+  ERP_ROUTES,
+  ERP_SALES,
+  ERP_SCALES,
+  ERP_SUPPLIERS,
+  ERP_CITY_RATES,
+} from './data/erpModulesSeed';
 import ProductsView from './components/ProductsView';
+import ERPView from './components/ERPView';
 import {
   buildProductOptionLabel,
   formatCurrency as formatProductCurrency,
@@ -28,7 +41,20 @@ const STORAGE_KEYS = {
   orders: 'thorena.orders',
   activeView: 'thorena.active-view',
   products: 'thorena.products',
+  clients: 'thorena.clients',
+  cobranzas: 'thorena.cobranzas',
+  erpRoutes: 'thorena.erp-routes',
+  erpScales: 'thorena.erp-scales',
+  erpPurchases: 'thorena.erp-purchases',
+  erpSales: 'thorena.erp-sales',
+  erpProductsFull: 'thorena.erp-products-full',
+  erpSuppliers: 'thorena.erp-suppliers',
+  erpCityRates: 'thorena.erp-city-rates',
 };
+
+const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pagado', 'Pendiente', 'Anulado'];
+const FINAL_ORDER_STATUSES = new Set(['Pagado', 'Anulado', 'Terminado']);
+const ORDER_DETAIL_EXPAND_THRESHOLD = 4;
 
 const EMPTY_FORM = {
   customerName: '',
@@ -66,6 +92,76 @@ function getInitialAuth() {
   return readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.auth, 'false') === 'true';
 }
 
+function normalizeActiveView(view) {
+  if (view === 'productos') return 'inventario';
+  return view;
+}
+
+function normalizeNameKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .trim();
+}
+
+function excelSerialToISO(value) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return '';
+  }
+
+  const date = new Date((numeric - 25569) * 86400 * 1000);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+}
+
+function normalizeDateValue(value) {
+  if (!value) return '';
+
+  if (typeof value === 'number') {
+    return excelSerialToISO(value);
+  }
+
+  const normalized = String(value).trim();
+  if (!normalized) return '';
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeCobranzaStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+  if (status === 'vencido') return 'Vencido';
+  if (status === 'pagada' || status === 'pagado') return 'Pagada';
+  return 'Pendiente';
+}
+
+function normalizeCobranza(raw = {}, index = 0) {
+  const clientName = String(raw.clientName || raw.cliente || '').trim();
+  const amount = Math.max(0, Number(raw.amount ?? raw.monto) || 0);
+  const paidAmount = Math.max(0, Number(raw.paidAmount ?? raw.abono) || 0);
+  const balanceFromRaw = Number(raw.balance ?? raw.saldo);
+  const balance = Math.max(0, Number.isFinite(balanceFromRaw) ? balanceFromRaw : amount - paidAmount);
+
+  return {
+    id: String(raw.id || `cob-${index + 1}`),
+    clientName,
+    document: String(raw.document || raw.documento || '').trim(),
+    issueDate: normalizeDateValue(raw.issueDate ?? raw.fechaEmision),
+    dueDate: normalizeDateValue(raw.dueDate ?? raw.vencimiento),
+    amount,
+    paidAmount,
+    balance,
+    status: normalizeCobranzaStatus(raw.status ?? raw.estado),
+    notes: String(raw.notes ?? raw.observacion ?? '').trim(),
+  };
+}
+
 function normalizeChecklist(checklist) {
   return CHECKLIST_ITEMS.reduce((acc, item) => {
     acc[item.key] = Boolean(checklist?.[item.key]);
@@ -82,7 +178,14 @@ function normalizeItems(items) {
       const unitPrice = Math.max(0, Number(item?.unitPrice) || 0);
       const productName = String(item?.productName || '').trim();
       const basePrice = Math.max(0, Number(item?.basePrice ?? unitPrice) || unitPrice);
-      const discountPercent = Math.max(0, Number(item?.discountPercent) || 0);
+      const offerDiscountPercent = Math.max(0, Number(item?.offerDiscountPercent ?? item?.discountPercent) || 0);
+      const unitPriceBeforeScale = Math.max(0, Number(item?.unitPriceBeforeScale ?? unitPrice) || unitPrice);
+      const volumeDiscountRate = Math.max(0, Number(item?.volumeDiscountRate) || 0);
+      const volumeDiscountPercent = Math.max(0, Number(item?.volumeDiscountPercent) || Math.round(volumeDiscountRate * 100));
+      const volumeScaleLabel = String(item?.volumeScaleLabel || '').trim() || 'Sin escala';
+      const subtotalBeforeScale = Math.max(0, Number(item?.subtotalBeforeScale ?? unitPriceBeforeScale * quantity) || unitPriceBeforeScale * quantity);
+      const subtotal = Math.max(0, Number(item?.subtotal ?? unitPrice * quantity) || unitPrice * quantity);
+      const discountAmount = Math.max(0, Number(item?.discountAmount) || Math.max(0, subtotalBeforeScale - subtotal));
 
       if (!productName || !Number.isFinite(unitPrice)) {
         return null;
@@ -92,34 +195,73 @@ function normalizeItems(items) {
         productId: String(item?.productId || productName),
         productName,
         unitPrice,
+        unitPriceBeforeScale,
         basePrice,
-        discountPercent,
+        offerDiscountPercent,
+        volumeDiscountRate,
+        volumeDiscountPercent,
+        volumeScaleLabel,
+        subtotalBeforeScale,
+        discountAmount,
         quantity,
-        subtotal: unitPrice * quantity,
+        subtotal,
       };
     })
     .filter(Boolean);
 }
 
 function normalizeOrder(order) {
-  const status = order?.status === 'Terminado' ? 'Terminado' : 'Pendiente';
+  const rawStatus = String(order?.status || '').trim();
+  const mappedStatus = rawStatus === 'Terminado' ? 'Pagado' : rawStatus;
+  const status = ERP_ORDER_STATUSES.includes(mappedStatus) ? mappedStatus : 'Pendiente';
   const items = normalizeItems(order?.items);
   const customerContact = String(order?.customerNumber || order?.contactPhone || '');
+  const subtotalBeforeDiscount = items.reduce((sum, item) => sum + (item.subtotalBeforeScale || item.subtotal), 0);
+  const itemsTotal = items.reduce((sum, item) => sum + item.subtotal, 0);
+  const totalDiscountAmount = Math.max(0, subtotalBeforeDiscount - itemsTotal);
+  const dispatchRate = Math.max(0, Number(order?.dispatchRate) || 0);
+  const dispatchSurchargeRaw = Number(order?.dispatchSurcharge);
+  const dispatchSurcharge = Math.max(
+    0,
+    Number.isFinite(dispatchSurchargeRaw) ? dispatchSurchargeRaw : Math.round(itemsTotal * dispatchRate),
+  );
+  const normalizedItemsTotal = Math.max(0, Number(order?.itemsTotal) || itemsTotal);
+  const normalizedTotal = Math.max(0, Number(order?.total) || normalizedItemsTotal + dispatchSurcharge);
 
   return {
     code: String(order?.code || 'PED-0000'),
     createdAt: order?.createdAt || new Date().toISOString(),
+    saleChannel: order?.saleChannel === 'online' ? 'online' : order?.saleChannel === 'oficina' ? 'oficina' : 'terreno',
     customerName: String(order?.customerName || ''),
     customerRut: String(order?.customerRut || ''),
     customerNumber: customerContact,
+    clientId: String(order?.clientId || ''),
+    paymentMethod: String(order?.paymentMethod || ''),
     deliveryAddress: String(order?.deliveryAddress || ''),
     contactPhone: customerContact,
     observations: String(order?.observations || ''),
     sellerName: String(order?.sellerName || DEFAULT_SELLER.name),
     sellerRut: String(order?.sellerRut || DEFAULT_SELLER.rut),
     status,
-    total: items.reduce((sum, item) => sum + item.subtotal, 0),
+    subtotalBeforeDiscount,
+    totalDiscountAmount,
+    itemsTotal: normalizedItemsTotal,
+    dispatchCity: String(order?.dispatchCity || order?.clientSnapshot?.zone || ''),
+    dispatchRate,
+    dispatchSurcharge,
+    total: normalizedTotal,
     items,
+    clientSnapshot: order?.clientSnapshot
+      ? {
+          id: String(order.clientSnapshot.id || ''),
+          name: String(order.clientSnapshot.name || ''),
+          type: String(order.clientSnapshot.type || ''),
+          zone: String(order.clientSnapshot.zone || ''),
+          sector: String(order.clientSnapshot.sector || ''),
+          creditEnabled: Boolean(order.clientSnapshot.creditEnabled),
+          debt: Math.max(0, Number(order.clientSnapshot.debt) || 0),
+        }
+      : null,
     checklist: normalizeChecklist(order?.checklist),
     showReceipt: Boolean(order?.showReceipt),
   };
@@ -131,8 +273,45 @@ function loadOrders() {
 }
 
 function loadProducts() {
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.products, PRODUCTS);
-  return normalizeProducts(Array.isArray(stored) ? stored : PRODUCTS);
+  const fallback = ERP_PRODUCTS.length ? ERP_PRODUCTS : PRODUCTS;
+  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.products, fallback);
+  return normalizeProducts(Array.isArray(stored) ? stored : fallback);
+}
+
+function loadClients() {
+  const fallback = ERP_CLIENTS;
+  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.clients, fallback);
+  const source = Array.isArray(stored) ? stored : fallback;
+
+  return source.map((client) => ({
+    ...client,
+    contact: client.contact || '',
+    whatsapp: client.whatsapp || client.phone || '',
+    instagram: client.instagram || '',
+    monthlyTarget: Math.max(0, Number(client.monthlyTarget) || 0),
+    accumulatedSales: Math.max(0, Number(client.accumulatedSales) || 0),
+    goalProgress: Math.max(0, Number(client.goalProgress) || 0),
+    creditLimit: Math.max(0, Number(client.creditLimit) || 0),
+    sector: client.sector || '',
+    zone: client.zone || '',
+    frequency: client.frequency || 'Semanal',
+    notes: client.notes || client.observations || '',
+    status: client.status || 'Activo',
+    lastPurchase: normalizeDateValue(client.lastPurchase || ERP_CLIENT_LAST_PURCHASE[client.id] || ''),
+  }));
+}
+
+function loadCobranzas() {
+  const fallback = ERP_COBRANZAS;
+  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.cobranzas, fallback);
+  const source = Array.isArray(stored) ? stored : fallback;
+
+  return source.map((item, index) => normalizeCobranza(item, index)).filter((item) => item.clientName);
+}
+
+function loadErpModule(storageKey, fallback) {
+  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, storageKey, fallback);
+  return Array.isArray(stored) ? stored : fallback;
 }
 
 function createInitialDraft(products) {
@@ -276,11 +455,27 @@ function Header({ activeView, onChangeView, onLogout, resolvedTheme, onToggleThe
         </button>
         <button
           type="button"
-          className={activeView === 'productos' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('productos')}
-          aria-current={activeView === 'productos' ? 'page' : undefined}
+          className={activeView === 'inventario' ? 'nav-button is-active' : 'nav-button'}
+          onClick={() => onChangeView('inventario')}
+          aria-current={activeView === 'inventario' ? 'page' : undefined}
         >
-          Productos
+          Inventario
+        </button>
+        <button
+          type="button"
+          className={activeView === 'clientes' ? 'nav-button is-active' : 'nav-button'}
+          onClick={() => onChangeView('clientes')}
+          aria-current={activeView === 'clientes' ? 'page' : undefined}
+        >
+          Clientes
+        </button>
+        <button
+          type="button"
+          className={activeView === 'erp' ? 'nav-button is-active' : 'nav-button'}
+          onClick={() => onChangeView('erp')}
+          aria-current={activeView === 'erp' ? 'page' : undefined}
+        >
+          ERP
         </button>
       </nav>
 
@@ -587,11 +782,29 @@ function SalesView({ orders, setOrders }) {
   );
 }
 
-function OrderCard({ order, onToggleChecklist, onToggleReceipt, onFinishOrder }) {
-  const completed = order.status === 'Terminado';
+function getStatusBadgeClass(status) {
+  if (status === 'Pagado' || status === 'Despachado') {
+    return 'badge badge-success';
+  }
+
+  if (status === 'Anulado') {
+    return 'badge badge-warning';
+  }
+
+  return 'badge badge-warning';
+}
+
+function OrderCard({ order, onUpdateStatus }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasManyItems = order.items.length > ORDER_DETAIL_EXPAND_THRESHOLD;
+  const visibleItems = hasManyItems && !expanded ? order.items.slice(0, ORDER_DETAIL_EXPAND_THRESHOLD) : order.items;
+  const hiddenItemsCount = Math.max(0, order.items.length - visibleItems.length);
+  const totalUnits = order.items.reduce((sum, item) => sum + item.quantity, 0);
+  const lineDiscountTotal = order.items.reduce((sum, item) => sum + (item.discountAmount || 0), 0);
+  const statusLocked = FINAL_ORDER_STATUSES.has(order.status);
 
   return (
-    <article className={completed ? 'order-card panel order-card-done' : 'order-card panel'}>
+    <article className={order.status === 'Pagado' ? 'order-card panel order-card-done' : 'order-card panel'}>
       <div className="order-head">
         <div>
           <p className="eyebrow">{order.code}</p>
@@ -599,31 +812,63 @@ function OrderCard({ order, onToggleChecklist, onToggleReceipt, onFinishOrder })
           <p className="muted">{formatDateTime(order.createdAt)}</p>
         </div>
 
-        <div className={completed ? 'badge badge-success' : 'badge badge-warning'}>
-          {order.status}
-        </div>
+        <div className={getStatusBadgeClass(order.status)}>{order.status}</div>
       </div>
 
       <div className="order-grid">
+        <div>
+          <span className="field-label">Nombre cliente</span>
+          <p>{order.customerName || '-'}</p>
+        </div>
         <div>
           <span className="field-label">RUT cliente</span>
           <p>{order.customerRut || '-'}</p>
         </div>
         <div>
-          <span className="field-label">Número de cliente / Teléfono o contacto</span>
-          <p>{getCustomerContact(order)}</p>
-        </div>
-        <div>
-          <span className="field-label">Dirección de despacho</span>
+          <span className="field-label">Direccion de despacho</span>
           <p>{order.deliveryAddress || '-'}</p>
         </div>
         <div>
-          <span className="field-label">Vendedor</span>
-          <p>{order.sellerName || '-'}</p>
+          <span className="field-label">Telefono cliente</span>
+          <p>{getCustomerContact(order)}</p>
         </div>
         <div>
-          <span className="field-label">RUT vendedor</span>
-          <p>{order.sellerRut || '-'}</p>
+          <span className="field-label">Metodo de pago</span>
+          <p>{order.paymentMethod || '-'}</p>
+        </div>
+        <div>
+          <span className="field-label">Tipo de cliente</span>
+          <p>{order.clientSnapshot?.type || '-'}</p>
+        </div>
+        <div>
+          <span className="field-label">Zona / Sector</span>
+          <p>
+            {order.clientSnapshot?.zone || '-'} / {order.clientSnapshot?.sector || '-'}
+          </p>
+        </div>
+        <div>
+          <span className="field-label">Origen de venta</span>
+          <p>
+            {order.saleChannel === 'online'
+              ? 'Venta Online'
+              : order.saleChannel === 'oficina'
+                ? 'Venta Oficina'
+                : 'Venta en Terreno'}
+          </p>
+        </div>
+        <div>
+          <span className="field-label">Deuda cliente</span>
+          <p>{formatCurrency(order.clientSnapshot?.debt || 0)}</p>
+        </div>
+        <div>
+          <span className="field-label">Tarifa ciudad</span>
+          <p>
+            {order.dispatchCity || '-'} ({Math.round((order.dispatchRate || 0) * 100)}%)
+          </p>
+        </div>
+        <div>
+          <span className="field-label">Recargo despacho</span>
+          <p>{formatCurrency(order.dispatchSurcharge || 0)}</p>
         </div>
         <div>
           <span className="field-label">Total del pedido</span>
@@ -638,224 +883,308 @@ function OrderCard({ order, onToggleChecklist, onToggleReceipt, onFinishOrder })
         </div>
       ) : null}
 
-      <div className="checklist-block">
-        <div className="panel-title compact-title">
-          <h4>Checklist</h4>
-        </div>
-
-        <div className="checklist-grid">
-          {CHECKLIST_ITEMS.map((item) => (
-            <label className="check-item" key={item.key}>
-              <input
-                type="checkbox"
-                checked={Boolean(order.checklist[item.key])}
-                onChange={(event) => onToggleChecklist(order.code, item.key, event.target.checked)}
-              />
-              <span>{item.label}</span>
-            </label>
-          ))}
-        </div>
+      <div className="panel-title compact-title">
+        <h4>Detalle del pedido</h4>
+        <p className="muted">
+          {order.items.length} items · {totalUnits} unidades · descuento por producto: {formatCurrency(lineDiscountTotal)}
+        </p>
       </div>
 
-      <div className="order-actions">
-        <button className="button button-secondary" type="button" onClick={() => onToggleReceipt(order.code)}>
-          {order.showReceipt ? 'Ocultar boleta' : 'Mostrar boleta'}
-        </button>
-
-        {!completed ? (
-          <button className="button button-primary" type="button" onClick={() => onFinishOrder(order.code)}>
-            Marcar como terminado
-          </button>
-        ) : (
-          <span className="done-note">Pedido terminado</span>
-        )}
-      </div>
-
-      {order.showReceipt ? <Receipt order={order} /> : null}
-    </article>
-  );
-}
-
-function Receipt({ order }) {
-  return (
-    <section className="receipt">
-      <div className="receipt-header">
-        <div>
-          <h4>{APP_NAME}</h4>
-          <p>{APP_LOCATION}</p>
-        </div>
-        <div className="receipt-code">{order.code}</div>
-      </div>
-
-      <div className="receipt-meta">
-        <div>
-          <span className="field-label">Fecha</span>
-          <p>{formatDateTime(order.createdAt)}</p>
-        </div>
-        <div>
-          <span className="field-label">Cliente</span>
-          <p>{order.customerName || '-'}</p>
-        </div>
-        <div>
-          <span className="field-label">RUT cliente</span>
-          <p>{order.customerRut || '-'}</p>
-        </div>
-        <div>
-          <span className="field-label">Número de cliente / Teléfono o contacto</span>
-          <p>{getCustomerContact(order)}</p>
-        </div>
-        <div>
-          <span className="field-label">Dirección</span>
-          <p>{order.deliveryAddress || '-'}</p>
-        </div>
-        <div>
-          <span className="field-label">Vendedor</span>
-          <p>{order.sellerName || '-'}</p>
-        </div>
-        <div>
-          <span className="field-label">RUT vendedor</span>
-          <p>{order.sellerRut || '-'}</p>
-        </div>
-      </div>
-
-      <div className="receipt-table-wrap">
-        <table className="receipt-table">
+      <div className="table-wrap">
+        <table className="items-table">
           <thead>
             <tr>
               <th>Producto</th>
-              <th>Cantidad</th>
-              <th>Precio unitario</th>
+              <th>Cant.</th>
+              <th>Escala</th>
+              <th>Desc. linea</th>
+              <th>Unitario</th>
               <th>Subtotal</th>
             </tr>
           </thead>
           <tbody>
-            {order.items.map((item) => (
+            {visibleItems.map((item) => (
               <tr key={item.productId}>
                 <td>{item.productName}</td>
                 <td>{item.quantity}</td>
-                <td>{formatCurrency(item.unitPrice)}</td>
-                <td>{formatCurrency(item.subtotal)}</td>
+                <td>
+                  {item.volumeScaleLabel || 'Sin escala'} ({Math.max(0, Number(item.volumeDiscountPercent) || 0)}%)
+                </td>
+                <td>{item.discountAmount > 0 ? `-${formatCurrency(item.discountAmount)}` : '-'}</td>
+                <td>
+                  {item.unitPriceBeforeScale > item.unitPrice ? <span className="strike-price">{formatCurrency(item.unitPriceBeforeScale)}</span> : null}
+                  <div>{formatCurrency(item.unitPrice)}</div>
+                </td>
+                <td>
+                  {item.subtotalBeforeScale > item.subtotal ? <span className="strike-price">{formatCurrency(item.subtotalBeforeScale)}</span> : null}
+                  <div>{formatCurrency(item.subtotal)}</div>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      <div className="receipt-total">
-        <span>Total final</span>
-        <strong>{formatCurrency(order.total)}</strong>
-      </div>
+      <div className="order-actions">
+        {hasManyItems ? (
+          <button className="button button-secondary" type="button" onClick={() => setExpanded((current) => !current)}>
+            {expanded ? 'Ocultar detalle' : `Ver detalle completo (+${hiddenItemsCount})`}
+          </button>
+        ) : null}
 
-      <p className="receipt-foot">Documento referencial generado para mockup MVP</p>
-    </section>
+        <label className="field status-select-field">
+          <span>Estado ERP</span>
+          <select value={order.status} onChange={(event) => onUpdateStatus(order.code, event.target.value)} disabled={statusLocked}>
+            {ERP_ORDER_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        </label>
+        {statusLocked ? <span className="status-lock-note">Estado final bloqueado</span> : null}
+      </div>
+    </article>
   );
 }
 
 function OrdersView({ orders, setOrders }) {
   const ordered = [...orders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  const pendingOrders = ordered.filter((order) => order.status !== 'Terminado');
-  const finishedOrders = ordered.filter((order) => order.status === 'Terminado');
 
-  const toggleChecklist = (code, key, checked) => {
+  const updateStatus = (code, nextStatus) => {
+    if (!ERP_ORDER_STATUSES.includes(nextStatus)) {
+      return;
+    }
+
     setOrders((current) =>
       current.map((order) =>
-        order.code === code
+        order.code === code && !FINAL_ORDER_STATUSES.has(order.status)
           ? {
               ...order,
-              checklist: {
-                ...order.checklist,
-                [key]: checked,
-              },
+              status: nextStatus,
             }
           : order,
       ),
     );
   };
 
-  const toggleReceipt = (code) => {
-    setOrders((current) =>
-      current.map((order) =>
-        order.code === code
-          ? {
-              ...order,
-              showReceipt: !order.showReceipt,
-            }
-          : order,
-      ),
-    );
-  };
-
-  const finishOrder = (code) => {
-    setOrders((current) =>
-      current.map((order) =>
-        order.code === code
-          ? {
-              ...order,
-              status: 'Terminado',
-            }
-          : order,
-      ),
-    );
-  };
+  const statusSummary = ERP_ORDER_STATUSES.map((status) => ({
+    status,
+    count: ordered.filter((order) => order.status === status).length,
+  }));
 
   return (
     <section className="screen">
-      <div className="screen-heading">
-        <p className="eyebrow">Pedidos</p>
-        <h2>Gestión de pedidos</h2>
-        <p className="muted">Revisa pedidos, marca checklist y cierra los que ya están listos.</p>
+      <div className="screen-heading orders-heading-compact">
+        <h2>Pedidos</h2>
+        <p className="muted">Estado, cliente y detalle con descuentos por producto.</p>
       </div>
 
       {ordered.length === 0 ? (
         <div className="panel empty-orders">
-          <h3>No hay pedidos generados todavía</h3>
+          <h3>No hay pedidos generados todavia</h3>
           <p className="muted">Vuelve a Ventas para crear el primero.</p>
         </div>
       ) : (
         <div className="orders-groups">
-          {pendingOrders.length > 0 ? (
-            <section className="orders-group">
-              <div className="section-heading compact-section-heading">
-                <h3>Pendientes</h3>
-                <p className="muted">Pedidos que aún están en proceso.</p>
-              </div>
+          <div className="status-summary-list" aria-label="Resumen de estados">
+            {statusSummary.map((row) => (
+              <span key={row.status} className="offer-chip">
+                {row.status}: {row.count}
+              </span>
+            ))}
+          </div>
 
-              <div className="orders-list">
-                {pendingOrders.map((order) => (
-                  <OrderCard
-                    key={order.code}
-                    order={order}
-                    onToggleChecklist={toggleChecklist}
-                    onToggleReceipt={toggleReceipt}
-                    onFinishOrder={finishOrder}
-                  />
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          {finishedOrders.length > 0 ? (
-            <section className="orders-group">
-              <div className="section-heading compact-section-heading">
-                <h3>Terminados</h3>
-                <p className="muted">Pedidos ya cerrados y listos.</p>
-              </div>
-
-              <div className="orders-list">
-                {finishedOrders.map((order) => (
-                  <OrderCard
-                    key={order.code}
-                    order={order}
-                    onToggleChecklist={toggleChecklist}
-                    onToggleReceipt={toggleReceipt}
-                    onFinishOrder={finishOrder}
-                  />
-                ))}
-              </div>
-            </section>
-          ) : null}
+          <section className="orders-group">
+            <div className="orders-list">
+              {ordered.map((order) => (
+                <OrderCard key={order.code} order={order} onUpdateStatus={updateStatus} />
+              ))}
+            </div>
+          </section>
         </div>
       )}
+    </section>
+  );
+}
+
+function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
+  const dateFormatter = useMemo(() => new Intl.DateTimeFormat('es-CL', { dateStyle: 'medium' }), []);
+
+  const latestOrderByClient = useMemo(() => {
+    const map = new Map();
+
+    orders.forEach((order) => {
+      const key = normalizeNameKey(order.customerName);
+      if (!key || !order.createdAt) return;
+
+      const parsed = new Date(order.createdAt);
+      if (Number.isNaN(parsed.getTime())) return;
+
+      const current = map.get(key);
+      if (!current || parsed > current) {
+        map.set(key, parsed);
+      }
+    });
+
+    return map;
+  }, [orders]);
+
+  const cobranzaByClient = useMemo(() => {
+    const map = new Map();
+
+    cobranzas.forEach((record) => {
+      const key = normalizeNameKey(record.clientName);
+      if (!key) return;
+
+      const current = map.get(key);
+      if (!current) {
+        map.set(key, record);
+        return;
+      }
+
+      const currentBalance = Number(current.balance) || 0;
+      const nextBalance = Number(record.balance) || 0;
+      if (nextBalance > currentBalance) {
+        map.set(key, record);
+        return;
+      }
+
+      const currentDue = current.dueDate ? new Date(current.dueDate).getTime() : 0;
+      const nextDue = record.dueDate ? new Date(record.dueDate).getTime() : 0;
+      if (nextDue > currentDue) {
+        map.set(key, record);
+      }
+    });
+
+    return map;
+  }, [cobranzas]);
+
+  const clientRows = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return clients
+      .map((client) => {
+        const key = normalizeNameKey(client.name);
+        const cobranza = cobranzaByClient.get(key) || null;
+        const balance = cobranza ? Math.max(0, Number(cobranza.balance) || 0) : Math.max(0, Number(client.debt) || 0);
+        const dueDate = cobranza?.dueDate ? new Date(cobranza.dueDate) : null;
+        const isDueOver = dueDate ? dueDate < today : false;
+
+        let debtStatus = 'Pagada';
+        if (balance > 0) {
+          debtStatus = cobranza?.status === 'Vencido' || isDueOver ? 'Vencido' : 'Pendiente';
+        }
+
+        const latestOrder = latestOrderByClient.get(key) || null;
+        const lastPurchase = client.lastPurchase ? new Date(client.lastPurchase) : latestOrder;
+
+        return {
+          id: client.id,
+          name: client.name,
+          zone: client.zone || '-',
+          status: client.status || 'Activo',
+          debtStatus,
+          balance,
+          dueDate,
+          lastPurchase,
+          cobranzaId: cobranza?.id || null,
+        };
+      })
+      .sort((a, b) => {
+        const priority = { Vencido: 0, Pendiente: 1, Pagada: 2 };
+        const statusDiff = priority[a.debtStatus] - priority[b.debtStatus];
+        if (statusDiff !== 0) return statusDiff;
+        return a.name.localeCompare(b.name);
+      });
+  }, [clients, cobranzaByClient, latestOrderByClient]);
+
+  const summary = useMemo(
+    () =>
+      clientRows.reduce(
+        (acc, row) => {
+          if (row.debtStatus === 'Vencido') acc.vencido += 1;
+          if (row.debtStatus === 'Pendiente') acc.pendiente += 1;
+          if (row.debtStatus === 'Pagada') acc.pagada += 1;
+          return acc;
+        },
+        { pendiente: 0, vencido: 0, pagada: 0 },
+      ),
+    [clientRows],
+  );
+
+  const handleDeleteCobranza = (cobranzaId) => {
+    setCobranzas((current) => current.filter((item) => item.id !== cobranzaId));
+  };
+
+  const formatDate = (date) => {
+    if (!date || Number.isNaN(date.getTime())) return '-';
+    return dateFormatter.format(date);
+  };
+
+  return (
+    <section className="screen">
+      <div className="screen-heading orders-heading-compact">
+        <h2>Clientes</h2>
+        <p className="muted">Nombre, zona, deuda, vencimiento y ultima compra de cada cliente.</p>
+      </div>
+
+      <div className="status-summary-list" aria-label="Resumen de cobranza por cliente">
+        <span className="offer-chip">Pendiente: {summary.pendiente}</span>
+        <span className="offer-chip">Vencido: {summary.vencido}</span>
+        <span className="offer-chip">Pagada: {summary.pagada}</span>
+      </div>
+
+      <div className="inventory-grid">
+        {clientRows.length === 0 ? (
+          <div className="panel empty-orders">
+            <h3>No hay clientes para mostrar</h3>
+            <p className="muted">Revisa ERP para agregar clientes activos.</p>
+          </div>
+        ) : (
+          clientRows.map((row) => {
+            const debtClass = row.debtStatus === 'Vencido' ? 'debt-chip-overdue' : row.debtStatus === 'Pendiente' ? 'debt-chip-pending' : 'debt-chip-paid';
+
+            return (
+              <article className="panel client-card" key={row.id}>
+                <div className="inventory-card-head">
+                  <div>
+                    <p className="eyebrow">{row.zone}</p>
+                    <h3>{row.name}</h3>
+                  </div>
+                  <span className={`inventory-status-chip ${debtClass}`}>{row.debtStatus}</span>
+                </div>
+
+                <div className="inventory-metrics">
+                  <div>
+                    <span className="field-label">Estado de deuda</span>
+                    <strong>{formatCurrency(row.balance)}</strong>
+                  </div>
+                  <div>
+                    <span className="field-label">Hasta cuando paga</span>
+                    <strong>{formatDate(row.dueDate)}</strong>
+                  </div>
+                  <div>
+                    <span className="field-label">Ultima compra</span>
+                    <strong>{formatDate(row.lastPurchase)}</strong>
+                  </div>
+                  <div>
+                    <span className="field-label">Estado</span>
+                    <strong>{row.status}</strong>
+                  </div>
+                </div>
+
+                {row.debtStatus === 'Pagada' && row.cobranzaId ? (
+                  <button className="button button-secondary" type="button" onClick={() => handleDeleteCobranza(row.cobranzaId)}>
+                    Eliminar cobranza
+                  </button>
+                ) : null}
+              </article>
+            );
+          })
+        )}
+      </div>
     </section>
   );
 }
@@ -866,11 +1195,22 @@ function App() {
   const [authenticated, setAuthenticated] = useState(() => getInitialAuth());
   const [activeView, setActiveView] = useState(() =>
     getInitialAuth()
-      ? readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.activeView, 'ventas')
+      ? normalizeActiveView(readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.activeView, 'ventas'))
       : 'ventas',
   );
   const [orders, setOrders] = useState(() => loadOrders());
   const [products, setProducts] = useState(() => loadProducts());
+  const [clients, setClients] = useState(() => loadClients());
+  const [cobranzas, setCobranzas] = useState(() => loadCobranzas());
+  const [erpRoutes, setErpRoutes] = useState(() => loadErpModule(STORAGE_KEYS.erpRoutes, ERP_ROUTES));
+  const [erpScales, setErpScales] = useState(() =>
+    loadErpModule(STORAGE_KEYS.erpScales, ERP_SCALES.length ? ERP_SCALES : ERP_VOLUME_SCALES),
+  );
+  const [erpPurchases, setErpPurchases] = useState(() => loadErpModule(STORAGE_KEYS.erpPurchases, ERP_PURCHASES));
+  const [erpSales, setErpSales] = useState(() => loadErpModule(STORAGE_KEYS.erpSales, ERP_SALES));
+  const [erpProductsFull, setErpProductsFull] = useState(() => loadErpModule(STORAGE_KEYS.erpProductsFull, ERP_PRODUCTS_FULL));
+  const [erpSuppliers, setErpSuppliers] = useState(() => loadErpModule(STORAGE_KEYS.erpSuppliers, ERP_SUPPLIERS));
+  const [erpCityRates, setErpCityRates] = useState(() => loadErpModule(STORAGE_KEYS.erpCityRates, ERP_CITY_RATES));
 
   useLayoutEffect(() => {
     const nextResolvedTheme = getResolvedTheme(themeMode);
@@ -923,6 +1263,42 @@ function App() {
   }, [products]);
 
   useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.clients, clients);
+  }, [clients]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.cobranzas, cobranzas);
+  }, [cobranzas]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpRoutes, erpRoutes);
+  }, [erpRoutes]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpScales, erpScales);
+  }, [erpScales]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpPurchases, erpPurchases);
+  }, [erpPurchases]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpSales, erpSales);
+  }, [erpSales]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpProductsFull, erpProductsFull);
+  }, [erpProductsFull]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpSuppliers, erpSuppliers);
+  }, [erpSuppliers]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpCityRates, erpCityRates);
+  }, [erpCityRates]);
+
+  useEffect(() => {
     if (authenticated) {
       writeString(window.sessionStorage, STORAGE_KEYS.activeView, activeView);
     }
@@ -972,9 +1348,40 @@ function App() {
 
       <main className="app-main">
         {activeView === 'ventas' ? (
-          <SalesWorkspace products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} />
+          <SalesWorkspace
+            products={products}
+            setProducts={setProducts}
+            orders={orders}
+            setOrders={setOrders}
+            clients={clients}
+            paymentMethods={ERP_PAYMENT_METHODS}
+            volumeScales={erpScales}
+            cityRates={erpCityRates}
+          />
         ) : activeView === 'pedidos' ? (
           <OrdersView orders={orders} setOrders={setOrders} />
+        ) : activeView === 'clientes' ? (
+          <ClientsView clients={clients} orders={orders} cobranzas={cobranzas} setCobranzas={setCobranzas} />
+        ) : activeView === 'erp' ? (
+          <ERPView
+            clients={clients}
+            setClients={setClients}
+            orders={orders}
+            routes={erpRoutes}
+            setRoutes={setErpRoutes}
+            scales={erpScales}
+            setScales={setErpScales}
+            purchases={erpPurchases}
+            setPurchases={setErpPurchases}
+            sales={erpSales}
+            setSales={setErpSales}
+            productsFull={erpProductsFull}
+            setProductsFull={setErpProductsFull}
+            suppliers={erpSuppliers}
+            setSuppliers={setErpSuppliers}
+            cityRates={erpCityRates}
+            setCityRates={setErpCityRates}
+          />
         ) : (
           <ProductsView products={products} setProducts={setProducts} />
         )}
