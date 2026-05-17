@@ -12,6 +12,14 @@ import { ERP_CLIENTS, ERP_PAYMENT_METHODS, ERP_PRODUCTS } from './data/erpSeed';
 import { ERP_COBRANZAS } from './data/erpCobranzas';
 import { ERP_CLIENT_LAST_PURCHASE } from './data/erpClientLastPurchase';
 import ERP_VOLUME_SCALES from './data/erpScales.json';
+import {
+  ERP_PRODUCTS_FULL,
+  ERP_PURCHASES,
+  ERP_ROUTES,
+  ERP_SALES,
+  ERP_SCALES,
+  ERP_SUPPLIERS,
+} from './data/erpModulesSeed';
 import ProductsView from './components/ProductsView';
 import ERPView from './components/ERPView';
 import {
@@ -33,8 +41,13 @@ const STORAGE_KEYS = {
   activeView: 'thorena.active-view',
   products: 'thorena.products',
   clients: 'thorena.clients',
-  spaces: 'thorena.spaces',
   cobranzas: 'thorena.cobranzas',
+  erpRoutes: 'thorena.erp-routes',
+  erpScales: 'thorena.erp-scales',
+  erpPurchases: 'thorena.erp-purchases',
+  erpSales: 'thorena.erp-sales',
+  erpProductsFull: 'thorena.erp-products-full',
+  erpSuppliers: 'thorena.erp-suppliers',
 };
 
 const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pagado', 'Pendiente', 'Anulado'];
@@ -258,6 +271,18 @@ function loadClients() {
 
   return source.map((client) => ({
     ...client,
+    contact: client.contact || '',
+    whatsapp: client.whatsapp || client.phone || '',
+    instagram: client.instagram || '',
+    monthlyTarget: Math.max(0, Number(client.monthlyTarget) || 0),
+    accumulatedSales: Math.max(0, Number(client.accumulatedSales) || 0),
+    goalProgress: Math.max(0, Number(client.goalProgress) || 0),
+    creditLimit: Math.max(0, Number(client.creditLimit) || 0),
+    sector: client.sector || '',
+    zone: client.zone || '',
+    frequency: client.frequency || 'Semanal',
+    notes: client.notes || client.observations || '',
+    status: client.status || 'Activo',
     lastPurchase: normalizeDateValue(client.lastPurchase || ERP_CLIENT_LAST_PURCHASE[client.id] || ''),
   }));
 }
@@ -270,24 +295,8 @@ function loadCobranzas() {
   return source.map((item, index) => normalizeCobranza(item, index)).filter((item) => item.clientName);
 }
 
-function loadSpaces() {
-  const fallback = [
-    {
-      id: 'esp-base-1',
-      name: 'Bodega Central',
-      manager: 'Jefe de Bodega',
-      status: 'Disponible',
-      notes: 'Zona principal de preparacion de pedidos.',
-    },
-    {
-      id: 'esp-base-2',
-      name: 'Sala de Ventas',
-      manager: 'Encargado Comercial',
-      status: 'Ocupado',
-      notes: 'Atencion presencial de clientes minoristas.',
-    },
-  ];
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.spaces, fallback);
+function loadErpModule(storageKey, fallback) {
+  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, storageKey, fallback);
   return Array.isArray(stored) ? stored : fallback;
 }
 
@@ -1163,7 +1172,14 @@ function App() {
   const [products, setProducts] = useState(() => loadProducts());
   const [clients, setClients] = useState(() => loadClients());
   const [cobranzas, setCobranzas] = useState(() => loadCobranzas());
-  const [spaces, setSpaces] = useState(() => loadSpaces());
+  const [erpRoutes, setErpRoutes] = useState(() => loadErpModule(STORAGE_KEYS.erpRoutes, ERP_ROUTES));
+  const [erpScales, setErpScales] = useState(() =>
+    loadErpModule(STORAGE_KEYS.erpScales, ERP_SCALES.length ? ERP_SCALES : ERP_VOLUME_SCALES),
+  );
+  const [erpPurchases, setErpPurchases] = useState(() => loadErpModule(STORAGE_KEYS.erpPurchases, ERP_PURCHASES));
+  const [erpSales, setErpSales] = useState(() => loadErpModule(STORAGE_KEYS.erpSales, ERP_SALES));
+  const [erpProductsFull, setErpProductsFull] = useState(() => loadErpModule(STORAGE_KEYS.erpProductsFull, ERP_PRODUCTS_FULL));
+  const [erpSuppliers, setErpSuppliers] = useState(() => loadErpModule(STORAGE_KEYS.erpSuppliers, ERP_SUPPLIERS));
 
   useLayoutEffect(() => {
     const nextResolvedTheme = getResolvedTheme(themeMode);
@@ -1224,8 +1240,28 @@ function App() {
   }, [cobranzas]);
 
   useEffect(() => {
-    writeJSON(window.localStorage, STORAGE_KEYS.spaces, spaces);
-  }, [spaces]);
+    writeJSON(window.localStorage, STORAGE_KEYS.erpRoutes, erpRoutes);
+  }, [erpRoutes]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpScales, erpScales);
+  }, [erpScales]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpPurchases, erpPurchases);
+  }, [erpPurchases]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpSales, erpSales);
+  }, [erpSales]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpProductsFull, erpProductsFull);
+  }, [erpProductsFull]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpSuppliers, erpSuppliers);
+  }, [erpSuppliers]);
 
   useEffect(() => {
     if (authenticated) {
@@ -1284,14 +1320,30 @@ function App() {
             setOrders={setOrders}
             clients={clients}
             paymentMethods={ERP_PAYMENT_METHODS}
-            volumeScales={ERP_VOLUME_SCALES}
+            volumeScales={erpScales}
           />
         ) : activeView === 'pedidos' ? (
           <OrdersView orders={orders} setOrders={setOrders} />
         ) : activeView === 'clientes' ? (
           <ClientsView clients={clients} orders={orders} cobranzas={cobranzas} setCobranzas={setCobranzas} />
         ) : activeView === 'erp' ? (
-          <ERPView clients={clients} setClients={setClients} spaces={spaces} setSpaces={setSpaces} orders={orders} />
+          <ERPView
+            clients={clients}
+            setClients={setClients}
+            orders={orders}
+            routes={erpRoutes}
+            setRoutes={setErpRoutes}
+            scales={erpScales}
+            setScales={setErpScales}
+            purchases={erpPurchases}
+            setPurchases={setErpPurchases}
+            sales={erpSales}
+            setSales={setErpSales}
+            productsFull={erpProductsFull}
+            setProductsFull={setErpProductsFull}
+            suppliers={erpSuppliers}
+            setSuppliers={setErpSuppliers}
+          />
         ) : (
           <ProductsView products={products} setProducts={setProducts} />
         )}
