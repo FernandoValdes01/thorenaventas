@@ -9,6 +9,7 @@ import {
   PRODUCTS,
   logo,
 } from './data/appData';
+import { ERP_CLIENTS, ERP_PAYMENT_METHODS, ERP_PRODUCTS } from './data/erpSeed';
 import ProductsView from './components/ProductsView';
 import ERPView from './components/ERPView';
 import {
@@ -69,6 +70,11 @@ function getInitialAuth() {
   return readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.auth, 'false') === 'true';
 }
 
+function normalizeActiveView(view) {
+  if (view === 'productos') return 'inventario';
+  return view;
+}
+
 function normalizeChecklist(checklist) {
   return CHECKLIST_ITEMS.reduce((acc, item) => {
     acc[item.key] = Boolean(checklist?.[item.key]);
@@ -115,6 +121,8 @@ function normalizeOrder(order) {
     customerName: String(order?.customerName || ''),
     customerRut: String(order?.customerRut || ''),
     customerNumber: customerContact,
+    clientId: String(order?.clientId || ''),
+    paymentMethod: String(order?.paymentMethod || ''),
     deliveryAddress: String(order?.deliveryAddress || ''),
     contactPhone: customerContact,
     observations: String(order?.observations || ''),
@@ -134,24 +142,13 @@ function loadOrders() {
 }
 
 function loadProducts() {
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.products, PRODUCTS);
-  return normalizeProducts(Array.isArray(stored) ? stored : PRODUCTS);
+  const fallback = ERP_PRODUCTS.length ? ERP_PRODUCTS : PRODUCTS;
+  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.products, fallback);
+  return normalizeProducts(Array.isArray(stored) ? stored : fallback);
 }
 
 function loadClients() {
-  const fallback = [
-    {
-      id: 'cli-base-1',
-      name: 'Ferreteria Los Coihues',
-      type: 'Mayorista',
-      rut: '76.123.456-7',
-      phone: '+56 9 4123 1111',
-      email: 'compras@coihues.cl',
-      address: 'Anibal Pinto 245, Villarrica',
-      observations: 'Pago habitual a 30 dias.',
-      debt: 280000,
-    },
-  ];
+  const fallback = ERP_CLIENTS;
   const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.clients, fallback);
   return Array.isArray(stored) ? stored : fallback;
 }
@@ -318,11 +315,19 @@ function Header({ activeView, onChangeView, onLogout, resolvedTheme, onToggleThe
         </button>
         <button
           type="button"
-          className={activeView === 'productos' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('productos')}
-          aria-current={activeView === 'productos' ? 'page' : undefined}
+          className={activeView === 'inventario' ? 'nav-button is-active' : 'nav-button'}
+          onClick={() => onChangeView('inventario')}
+          aria-current={activeView === 'inventario' ? 'page' : undefined}
         >
-          Productos
+          Inventario
+        </button>
+        <button
+          type="button"
+          className={activeView === 'clientes' ? 'nav-button is-active' : 'nav-button'}
+          onClick={() => onChangeView('clientes')}
+          aria-current={activeView === 'clientes' ? 'page' : undefined}
+        >
+          Clientes
         </button>
         <button
           type="button"
@@ -664,6 +669,10 @@ function OrderCard({ order, onToggleChecklist, onToggleReceipt, onFinishOrder })
           <p>{getCustomerContact(order)}</p>
         </div>
         <div>
+          <span className="field-label">Metodo de pago</span>
+          <p>{order.paymentMethod || '-'}</p>
+        </div>
+        <div>
           <span className="field-label">Dirección de despacho</span>
           <p>{order.deliveryAddress || '-'}</p>
         </div>
@@ -753,6 +762,10 @@ function Receipt({ order }) {
         <div>
           <span className="field-label">Número de cliente / Teléfono o contacto</span>
           <p>{getCustomerContact(order)}</p>
+        </div>
+        <div>
+          <span className="field-label">Metodo de pago</span>
+          <p>{order.paymentMethod || '-'}</p>
         </div>
         <div>
           <span className="field-label">Dirección</span>
@@ -910,13 +923,29 @@ function OrdersView({ orders, setOrders }) {
   );
 }
 
+function ClientsView() {
+  return (
+    <section className="screen">
+      <div className="screen-heading">
+        <p className="eyebrow">Clientes</p>
+        <h2>Modulo en construccion</h2>
+        <p className="muted">Esta pestaña quedara disponible en la siguiente iteracion.</p>
+      </div>
+      <div className="panel empty-orders">
+        <h3>Pronto veras la gestion dedicada de clientes</h3>
+        <p className="muted">Por ahora, utiliza ERP para revisar y cargar informacion comercial de clientes.</p>
+      </div>
+    </section>
+  );
+}
+
 function App() {
   const [themeMode, setThemeMode] = useState(() => getInitialThemeMode());
   const [resolvedTheme, setResolvedTheme] = useState(() => getResolvedTheme(getInitialThemeMode()));
   const [authenticated, setAuthenticated] = useState(() => getInitialAuth());
   const [activeView, setActiveView] = useState(() =>
     getInitialAuth()
-      ? readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.activeView, 'ventas')
+      ? normalizeActiveView(readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.activeView, 'ventas'))
       : 'ventas',
   );
   const [orders, setOrders] = useState(() => loadOrders());
@@ -1032,9 +1061,18 @@ function App() {
 
       <main className="app-main">
         {activeView === 'ventas' ? (
-          <SalesWorkspace products={products} setProducts={setProducts} orders={orders} setOrders={setOrders} />
+          <SalesWorkspace
+            products={products}
+            setProducts={setProducts}
+            orders={orders}
+            setOrders={setOrders}
+            clients={clients}
+            paymentMethods={ERP_PAYMENT_METHODS}
+          />
         ) : activeView === 'pedidos' ? (
           <OrdersView orders={orders} setOrders={setOrders} />
+        ) : activeView === 'clientes' ? (
+          <ClientsView />
         ) : activeView === 'erp' ? (
           <ERPView clients={clients} setClients={setClients} spaces={spaces} setSpaces={setSpaces} orders={orders} />
         ) : (

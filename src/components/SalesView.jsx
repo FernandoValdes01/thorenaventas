@@ -7,10 +7,8 @@ import {
 } from '../lib/catalog';
 
 const EMPTY_FORM = {
-  customerName: '',
-  customerRut: '',
-  customerNumber: '',
-  deliveryAddress: '',
+  clientId: '',
+  paymentMethod: '',
   observations: '',
 };
 
@@ -40,7 +38,7 @@ const createInitialDraft = (products) => {
   };
 };
 
-function SalesView({ products, setProducts, orders, setOrders }) {
+function SalesView({ products, setProducts, orders, setOrders, clients, paymentMethods }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [draft, setDraft] = useState(() => createInitialDraft(products));
   const [items, setItems] = useState([]);
@@ -48,6 +46,15 @@ function SalesView({ products, setProducts, orders, setOrders }) {
   const [errors, setErrors] = useState([]);
 
   const availableProducts = useMemo(() => products.filter((product) => product.stock > 0), [products]);
+  const availablePaymentMethods = useMemo(() => paymentMethods || [], [paymentMethods]);
+  const activeClients = useMemo(
+    () => clients.filter((client) => client.name && (client.status || 'Activo') === 'Activo'),
+    [clients],
+  );
+  const selectedClient = useMemo(
+    () => activeClients.find((client) => client.id === form.clientId) || null,
+    [activeClients, form.clientId],
+  );
   const total = useMemo(() => items.reduce((sum, item) => sum + item.subtotal, 0), [items]);
 
   useEffect(() => {
@@ -66,6 +73,12 @@ function SalesView({ products, setProducts, orders, setOrders }) {
 
   const handleFieldChange = (key) => (event) => {
     setForm((current) => ({ ...current, [key]: event.target.value }));
+    setFeedback(null);
+  };
+
+  const handleClientChange = (event) => {
+    const clientId = event.target.value;
+    setForm((current) => ({ ...current, clientId }));
     setFeedback(null);
   };
 
@@ -146,12 +159,10 @@ function SalesView({ products, setProducts, orders, setOrders }) {
     event.preventDefault();
 
     const nextErrors = [];
-    const customerContact = form.customerNumber.trim();
 
-    if (!form.customerName.trim()) nextErrors.push('Ingresa el nombre del cliente o negocio.');
-    if (!form.customerRut.trim()) nextErrors.push('Ingresa el RUT del cliente o negocio.');
-    if (!customerContact) nextErrors.push('Ingresa el número de cliente o teléfono de contacto.');
-    if (!form.deliveryAddress.trim()) nextErrors.push('Ingresa la dirección de despacho.');
+    if (!form.clientId) nextErrors.push('Selecciona un cliente para el pedido.');
+    if (!form.paymentMethod) nextErrors.push('Selecciona un metodo de pago.');
+    if (!selectedClient) nextErrors.push('El cliente seleccionado no esta disponible.');
     if (items.length === 0) nextErrors.push('Agrega al menos un producto al pedido.');
 
     setErrors(nextErrors);
@@ -171,12 +182,25 @@ function SalesView({ products, setProducts, orders, setOrders }) {
     const newOrder = {
       code,
       createdAt: new Date().toISOString(),
-      customerName: form.customerName.trim(),
-      customerRut: form.customerRut.trim(),
-      customerNumber: customerContact,
-      contactPhone: customerContact,
-      deliveryAddress: form.deliveryAddress.trim(),
+      customerName: selectedClient?.name || '',
+      customerRut: selectedClient?.rut || '',
+      customerNumber: selectedClient?.phone || selectedClient?.contact || '',
+      contactPhone: selectedClient?.phone || selectedClient?.contact || '',
+      deliveryAddress: selectedClient?.address || '',
       observations: form.observations.trim(),
+      clientId: form.clientId,
+      paymentMethod: form.paymentMethod,
+      clientSnapshot: selectedClient
+        ? {
+            id: selectedClient.id,
+            name: selectedClient.name,
+            type: selectedClient.type,
+            zone: selectedClient.zone,
+            sector: selectedClient.sector,
+            creditEnabled: Boolean(selectedClient.creditEnabled),
+            debt: Number(selectedClient.debt) || 0,
+          }
+        : null,
       sellerName: DEFAULT_SELLER.name,
       sellerRut: DEFAULT_SELLER.rut,
       status: 'Pendiente',
@@ -246,23 +270,27 @@ function SalesView({ products, setProducts, orders, setOrders }) {
 
           <div className="form-grid">
             <label className="field field-wide">
-              <span>Nombre del cliente o negocio</span>
-              <input value={form.customerName} onChange={handleFieldChange('customerName')} />
-            </label>
-
-            <label className="field">
-              <span>RUT del cliente o negocio</span>
-              <input value={form.customerRut} onChange={handleFieldChange('customerRut')} />
-            </label>
-
-            <label className="field field-wide">
-              <span>Número de cliente / Teléfono o contacto</span>
-              <input value={form.customerNumber} onChange={handleFieldChange('customerNumber')} />
+              <span>Seleccione al cliente</span>
+              <select value={form.clientId} onChange={handleClientChange}>
+                <option value="">Selecciona un cliente</option>
+                {activeClients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.name} - {client.zone}
+                  </option>
+                ))}
+              </select>
             </label>
 
             <label className="field field-wide">
-              <span>Dirección de despacho</span>
-              <input value={form.deliveryAddress} onChange={handleFieldChange('deliveryAddress')} />
+              <span>Seleccione metodo de pago</span>
+              <select value={form.paymentMethod} onChange={handleFieldChange('paymentMethod')}>
+                <option value="">Selecciona metodo de pago</option>
+                {availablePaymentMethods.map((method) => (
+                  <option key={method} value={method}>
+                    {method}
+                  </option>
+                ))}
+              </select>
             </label>
 
             <label className="field field-wide">
