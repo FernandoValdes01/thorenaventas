@@ -353,9 +353,40 @@ function LoginScreen({ onLogin }) {
 
 function Header({ activeView, onChangeView, onLogout, resolvedTheme, onToggleTheme }) {
   const themeLabel = resolvedTheme === 'light' ? 'Tema claro' : 'Tema oscuro';
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [activeView]);
+
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth >= 768) {
+        setMobileMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const handleNavSelect = (view) => {
+    onChangeView(view);
+    setMobileMenuOpen(false);
+  };
+
+  const handleThemeToggle = () => {
+    onToggleTheme();
+    setMobileMenuOpen(false);
+  };
+
+  const handleLogoutClick = () => {
+    setMobileMenuOpen(false);
+    onLogout();
+  };
 
   return (
-    <header className="app-header panel">
+    <header className={`app-header panel ${mobileMenuOpen ? 'menu-open' : ''}`}>
       <div className="brand-block">
         <div className="brand-mark brand-mark-small">
           <img src={logo} alt="Logo de Thorena Comercial" />
@@ -366,68 +397,81 @@ function Header({ activeView, onChangeView, onLogout, resolvedTheme, onToggleThe
         </div>
       </div>
 
-      <nav className="app-nav" aria-label="Secciones principales">
-        <button
-          type="button"
-          className={activeView === 'ventas' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('ventas')}
-          aria-current={activeView === 'ventas' ? 'page' : undefined}
-        >
-          Ventas
-        </button>
-        <button
-          type="button"
-          className={activeView === 'pedidos' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('pedidos')}
-          aria-current={activeView === 'pedidos' ? 'page' : undefined}
-        >
-          Pedidos
-        </button>
-        <button
-          type="button"
-          className={activeView === 'inventario' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('inventario')}
-          aria-current={activeView === 'inventario' ? 'page' : undefined}
-        >
-          Inventario
-        </button>
-        <button
-          type="button"
-          className={activeView === 'clientes' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('clientes')}
-          aria-current={activeView === 'clientes' ? 'page' : undefined}
-        >
-          Clientes
-        </button>
-        <button
-          type="button"
-          className={activeView === 'erp' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('erp')}
-          aria-current={activeView === 'erp' ? 'page' : undefined}
-        >
-          ERP
-        </button>
-      </nav>
+      <button
+        type="button"
+        className="mobile-menu-toggle"
+        onClick={() => setMobileMenuOpen((current) => !current)}
+        aria-label={mobileMenuOpen ? 'Cerrar menu' : 'Abrir menu'}
+        aria-expanded={mobileMenuOpen}
+        aria-controls="mobile-main-nav"
+      >
+        <span aria-hidden="true">{mobileMenuOpen ? '✕' : '☰'}</span>
+      </button>
 
-      <div className="header-actions">
-        <label className="theme-switch">
-          <span className="theme-switch-copy">
-            <strong>{themeLabel}</strong>
-          </span>
-          <input
-            type="checkbox"
-            checked={resolvedTheme === 'light'}
-            onChange={onToggleTheme}
-            aria-label="Cambiar tema"
-          />
-          <span className="theme-switch-track" aria-hidden="true">
-            <span className="theme-switch-thumb" />
-          </span>
-        </label>
+      <div id="mobile-main-nav" className={`mobile-menu-panel ${mobileMenuOpen ? 'is-open' : ''}`}>
+        <nav className="app-nav" aria-label="Secciones principales">
+          <button
+            type="button"
+            className={activeView === 'ventas' ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => handleNavSelect('ventas')}
+            aria-current={activeView === 'ventas' ? 'page' : undefined}
+          >
+            Ventas
+          </button>
+          <button
+            type="button"
+            className={activeView === 'pedidos' ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => handleNavSelect('pedidos')}
+            aria-current={activeView === 'pedidos' ? 'page' : undefined}
+          >
+            Pedidos
+          </button>
+          <button
+            type="button"
+            className={activeView === 'inventario' ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => handleNavSelect('inventario')}
+            aria-current={activeView === 'inventario' ? 'page' : undefined}
+          >
+            Inventario
+          </button>
+          <button
+            type="button"
+            className={activeView === 'clientes' ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => handleNavSelect('clientes')}
+            aria-current={activeView === 'clientes' ? 'page' : undefined}
+          >
+            Clientes
+          </button>
+          <button
+            type="button"
+            className={activeView === 'erp' ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => handleNavSelect('erp')}
+            aria-current={activeView === 'erp' ? 'page' : undefined}
+          >
+            ERP
+          </button>
+        </nav>
 
-        <button className="button button-secondary logout-button" type="button" onClick={onLogout}>
-          Cerrar sesión
-        </button>
+        <div className="header-actions">
+          <label className="theme-switch">
+            <span className="theme-switch-copy">
+              <strong>{themeLabel}</strong>
+            </span>
+            <input
+              type="checkbox"
+              checked={resolvedTheme === 'light'}
+              onChange={handleThemeToggle}
+              aria-label="Cambiar tema"
+            />
+            <span className="theme-switch-track" aria-hidden="true">
+              <span className="theme-switch-thumb" />
+            </span>
+          </label>
+
+          <button className="button button-secondary logout-button" type="button" onClick={handleLogoutClick}>
+            Cerrar sesión
+          </button>
+        </div>
       </div>
     </header>
   );

@@ -8,6 +8,13 @@
       "when": 1779061668911,
       "tag": "0000_empty_wolfpack",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1779061668912,
+      "tag": "0001_products_supplier_id",
+      "breakpoints": true
     }
   ]
 }

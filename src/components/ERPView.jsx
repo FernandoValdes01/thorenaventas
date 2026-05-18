@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -169,15 +169,6 @@ const emptySaleForm = {
   dispatchStatus: 'Pendiente',
 };
 
-const emptySupplierForm = {
-  name: '',
-  contact: '',
-  phone: '',
-  email: '',
-  status: 'Activo',
-  notes: '',
-};
-
 const emptyCityRateForm = {
   city: '',
   rate: '0',
@@ -298,7 +289,6 @@ function ERPView({
   const [purchaseForm, setPurchaseForm] = useState(emptyPurchaseForm);
   const [productForm, setProductForm] = useState(emptyProductForm);
   const [saleForm, setSaleForm] = useState(emptySaleForm);
-  const [supplierForm, setSupplierForm] = useState(emptySupplierForm);
   const [cityRateForm, setCityRateForm] = useState(emptyCityRateForm);
 
   const currentMonth = useMemo(() => new Date().toISOString().slice(0, 7), []);
@@ -382,16 +372,50 @@ function ERPView({
     return map;
   }, [suppliers]);
 
+  const supplierIdByName = useMemo(() => {
+    const map = new Map();
+    suppliers.forEach((supplier) => {
+      const key = String(supplier.name || '').trim().toLowerCase();
+      if (key) map.set(key, String(supplier.id));
+    });
+    return map;
+  }, [suppliers]);
+
+  const purchaseSupplierBySku = useMemo(() => {
+    const map = new Map();
+    purchases.forEach((purchase) => {
+      const sku = String(purchase.productSku || purchase.sku || '').trim();
+      if (!sku) return;
+      const byId = String(purchase.supplierId || '').trim();
+      if (byId) {
+        map.set(sku, byId);
+        return;
+      }
+      const byName = supplierIdByName.get(String(purchase.supplier || '').trim().toLowerCase());
+      if (byName) map.set(sku, byName);
+    });
+    return map;
+  }, [purchases, supplierIdByName]);
+
+  const getEffectiveSupplierId = (product) => {
+    const direct = String(product?.supplierId || '').trim();
+    if (direct) return direct;
+    const fromPurchase = purchaseSupplierBySku.get(String(product?.sku || '').trim());
+    if (fromPurchase) return fromPurchase;
+    const fromName = supplierIdByName.get(String(product?.supplier || product?.brand || '').trim().toLowerCase());
+    return fromName || '';
+  };
+
   const productsBySupplier = useMemo(() => {
     const map = new Map();
     productsFull.forEach((product) => {
-      const supplierId = String(product.supplierId || '');
+      const supplierId = getEffectiveSupplierId(product);
       if (!supplierId) return;
       if (!map.has(supplierId)) map.set(supplierId, []);
       map.get(supplierId).push(product);
     });
     return map;
-  }, [productsFull]);
+  }, [productsFull, purchaseSupplierBySku, supplierIdByName]);
 
   const purchaseProductsForSupplier = useMemo(() => {
     const supplierId = String(purchaseForm.supplierId || '');
@@ -429,13 +453,14 @@ function ERPView({
     setFeedback(null);
   };
 
-  const updateSupplierField = (key) => (event) => {
-    setSupplierForm((current) => ({ ...current, [key]: event.target.value }));
+  const updateCityRateField = (key) => (event) => {
+    setCityRateForm((current) => ({ ...current, [key]: event.target.value }));
     setFeedback(null);
   };
 
-  const updateCityRateField = (key) => (event) => {
-    setCityRateForm((current) => ({ ...current, [key]: event.target.value }));
+  const handlePurchaseSupplierChange = (event) => {
+    const supplierId = event.target.value;
+    setPurchaseForm((current) => ({ ...current, supplierId, productSku: '' }));
     setFeedback(null);
   };
 
@@ -463,9 +488,9 @@ function ERPView({
       zone: clientForm.zone.trim(),
       frequency: clientForm.frequency,
       creditEnabled: clientForm.creditEnabled === 'true',
-      debt: Math.max(0, Math.round(asNumber(clientForm.debt, 0))),
+      debt: 0,
       monthlyTarget: Math.max(0, Math.round(asNumber(clientForm.monthlyTarget, 0))),
-      accumulatedSales: Math.max(0, Math.round(asNumber(clientForm.accumulatedSales, 0))),
+      accumulatedSales: 0,
       goalProgress: clamp(asNumber(clientForm.goalProgress, 0), 0, 1),
       creditLimit: Math.max(0, Math.round(asNumber(clientForm.creditLimit, 0))),
       status: clientForm.status,
@@ -568,8 +593,32 @@ function ERPView({
   const handleAddPurchase = (event) => {
     event.preventDefault();
 
-    if (!purchaseForm.supplier.trim() || !purchaseForm.product.trim()) {
-      setFeedback({ type: 'error', text: 'Debes completar proveedor y producto.' });
+    const supplierId = String(purchaseForm.supplierId || '').trim();
+    if (!supplierId) {
+      setFeedback({ type: 'error', text: 'Debes seleccionar un proveedor.' });
+      return;
+    }
+
+    const productSku = String(purchaseForm.productSku || '').trim();
+    if (!productSku) {
+      setFeedback({ type: 'error', text: 'Debes seleccionar un producto.' });
+      return;
+    }
+
+    const supplier = suppliersById.get(supplierId);
+    if (!supplier) {
+      setFeedback({ type: 'error', text: 'El proveedor seleccionado no existe.' });
+      return;
+    }
+
+    const product = productsFull.find((item) => String(item.sku || '') === productSku);
+    if (!product) {
+      setFeedback({ type: 'error', text: 'El producto seleccionado no existe.' });
+      return;
+    }
+
+    if (getEffectiveSupplierId(product) !== supplierId) {
+      setFeedback({ type: 'error', text: 'El producto no pertenece al proveedor seleccionado.' });
       return;
     }
 
@@ -581,10 +630,12 @@ function ERPView({
     const newPurchase = {
       id: `comp-${Date.now()}`,
       date: purchaseForm.date || todayISO(),
-      supplier: purchaseForm.supplier.trim(),
+      supplierId,
+      supplier: supplier.name,
       purchaseOrder: purchaseForm.purchaseOrder.trim(),
-      sku: purchaseForm.sku.trim(),
-      product: purchaseForm.product.trim(),
+      productSku,
+      sku: product.sku,
+      product: product.product,
       quantity,
       unitCost,
       transportUnit,
@@ -594,6 +645,12 @@ function ERPView({
       observation: purchaseForm.observation.trim(),
     };
 
+    setProductsFull((current) =>
+      current.map((item) => {
+        if (item.sku !== productSku) return item;
+        return { ...item, stock: Math.max(0, Math.round(asNumber(item.stock, 0))) + quantity };
+      }),
+    );
     setPurchases((current) => [newPurchase, ...current]);
     setPurchaseForm(emptyPurchaseForm);
     setFeedback({ type: 'success', text: 'Compra registrada.' });
@@ -606,6 +663,57 @@ function ERPView({
     const sku = productForm.sku.trim();
     if (!productName || !sku) {
       setFeedback({ type: 'error', text: 'Debes completar SKU y nombre de producto.' });
+      return;
+    }
+
+    const skuAlreadyExists = productsFull.some((item) => String(item.sku || '').trim().toLowerCase() === sku.toLowerCase());
+    if (skuAlreadyExists) {
+      setFeedback({ type: 'error', text: 'El SKU ya existe. Usa un SKU unico.' });
+      return;
+    }
+
+    const shouldCreateSupplier = productForm.createSupplier === 'true';
+    const selectedSupplierId = String(productForm.supplierId || '').trim();
+    let supplierId = selectedSupplierId;
+    let supplierName = suppliersById.get(selectedSupplierId)?.name || '';
+
+    if (shouldCreateSupplier) {
+      const newSupplierName = productForm.newSupplierName.trim();
+      if (!newSupplierName) {
+        setFeedback({ type: 'error', text: 'Debes ingresar el nombre del nuevo proveedor.' });
+        return;
+      }
+
+      const duplicatedSupplier = suppliers.find(
+        (item) => String(item.name || '').trim().toLowerCase() === newSupplierName.toLowerCase(),
+      );
+      if (duplicatedSupplier) {
+        supplierId = String(duplicatedSupplier.id);
+        supplierName = duplicatedSupplier.name;
+      } else {
+        supplierId = `prov-${Date.now()}`;
+        supplierName = newSupplierName;
+        const newSupplier = {
+          id: supplierId,
+          name: newSupplierName,
+          contact: productForm.newSupplierContact.trim(),
+          phone: productForm.newSupplierPhone.trim(),
+          email: productForm.newSupplierEmail.trim(),
+          status: 'Activo',
+          notes: '',
+        };
+        setSuppliers((current) => [newSupplier, ...current]);
+      }
+    }
+
+    if (!supplierId) {
+      setFeedback({ type: 'error', text: 'Debes seleccionar un proveedor o crear uno nuevo.' });
+      return;
+    }
+
+    const initialPurchaseQuantity = Math.max(0, Math.round(asNumber(productForm.initialPurchaseQuantity, 0)));
+    if (initialPurchaseQuantity < 1) {
+      setFeedback({ type: 'error', text: 'Debes ingresar una cantidad inicial valida mayor a 0.' });
       return;
     }
 
@@ -623,13 +731,15 @@ function ERPView({
       category: productForm.category.trim() || 'General',
       product: productName,
       brand: productForm.brand.trim(),
+      supplierId,
+      supplier: supplierName,
       unit: productForm.unit,
       purchaseCost,
       transportUnit,
       finalCost,
       iva: 0.19,
       salePriceBase,
-      stock: Math.max(0, Math.round(asNumber(productForm.stock, 0))),
+      stock: initialPurchaseQuantity,
       stockMin: Math.max(0, Math.round(asNumber(productForm.stockMin, 0))),
       marginPct,
       unitProfit,
@@ -637,9 +747,30 @@ function ERPView({
       status: productForm.status,
     };
 
-    setProductsFull((current) => [newProduct, ...current.filter((item) => item.sku !== sku)]);
+    const initialPurchaseUnitCost = Math.max(0, Math.round(asNumber(productForm.initialPurchaseUnitCost, 0)));
+    const initialPurchaseTransportUnit = Math.max(0, Math.round(asNumber(productForm.initialPurchaseTransportUnit, 0)));
+    const initialPurchase = {
+      id: `comp-${Date.now()}`,
+      date: todayISO(),
+      supplierId,
+      supplier: supplierName,
+      purchaseOrder: productForm.initialPurchaseOrder.trim(),
+      productSku: sku,
+      sku,
+      product: productName,
+      quantity: initialPurchaseQuantity,
+      unitCost: initialPurchaseUnitCost,
+      transportUnit: initialPurchaseTransportUnit,
+      totalCost: initialPurchaseQuantity * (initialPurchaseUnitCost + initialPurchaseTransportUnit),
+      reception: productForm.initialPurchaseReception,
+      doc: productForm.initialPurchaseDoc.trim(),
+      observation: productForm.initialPurchaseObservation.trim(),
+    };
+
+    setProductsFull((current) => [newProduct, ...current]);
+    setPurchases((current) => [initialPurchase, ...current]);
     setProductForm(emptyProductForm);
-    setFeedback({ type: 'success', text: 'Producto registrado en ERP.' });
+    setFeedback({ type: 'success', text: 'Producto y compra inicial registrados en ERP.' });
   };
 
   const handleProductInlineChange = (sku, key, value) => {
@@ -666,6 +797,121 @@ function ERPView({
         return item;
       }),
     );
+  };
+
+  const handleClientInlineChange = (id, key, value) => {
+    setClients((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+
+        if (['debt', 'monthlyTarget', 'accumulatedSales', 'creditLimit'].includes(key)) {
+          return { ...item, [key]: Math.max(0, Math.round(asNumber(value, 0))) };
+        }
+
+        if (key === 'goalProgress') {
+          return { ...item, goalProgress: clamp(asNumber(value, 0), 0, 1) };
+        }
+
+        if (key === 'creditEnabled') {
+          return { ...item, creditEnabled: value === 'true' };
+        }
+
+        return { ...item, [key]: value };
+      }),
+    );
+  };
+
+  const handleRouteInlineChange = (id, key, value) => {
+    setRoutes((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+
+        const numericFields = ['visitedClients', 'clientsWithOrder', 'sales', 'kmRoute', 'fuel'];
+        const next = numericFields.includes(key)
+          ? { ...item, [key]: Math.max(0, Math.round(asNumber(value, 0))) }
+          : { ...item, [key]: value };
+
+        const visitedClients = Math.max(0, Math.round(asNumber(next.visitedClients, 0)));
+        const clientsWithOrder = Math.max(0, Math.round(asNumber(next.clientsWithOrder, 0)));
+        return {
+          ...next,
+          effectivenessPct: visitedClients > 0 ? clamp(clientsWithOrder / visitedClients, 0, 1) : 0,
+        };
+      }),
+    );
+  };
+
+  const handlePurchaseInlineChange = (id, key, value) => {
+    const currentPurchase = purchases.find((item) => item.id === id);
+    if (!currentPurchase) return;
+
+    if (key === 'quantity') {
+      const previousQuantity = Math.max(0, Math.round(asNumber(currentPurchase.quantity, 0)));
+      const nextQuantity = Math.max(1, Math.round(asNumber(value, 1)));
+      const delta = nextQuantity - previousQuantity;
+      const sku = String(currentPurchase.productSku || currentPurchase.sku || '');
+
+      if (delta !== 0 && sku) {
+        setProductsFull((current) =>
+          current.map((product) => {
+            if (product.sku !== sku) return product;
+            return { ...product, stock: Math.max(0, Math.round(asNumber(product.stock, 0)) + delta) };
+          }),
+        );
+      }
+    }
+
+    setPurchases((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+
+        if (key === 'supplierId') {
+          const supplierId = String(value || '');
+          const supplier = suppliersById.get(supplierId);
+          return {
+            ...item,
+            supplierId,
+            supplier: supplier?.name || item.supplier,
+          };
+        }
+
+        if (key === 'quantity' || key === 'unitCost' || key === 'transportUnit') {
+          const quantity = key === 'quantity' ? Math.max(1, Math.round(asNumber(value, 1))) : Math.max(1, Math.round(asNumber(item.quantity, 1)));
+          const unitCost = key === 'unitCost' ? Math.max(0, Math.round(asNumber(value, 0))) : Math.max(0, Math.round(asNumber(item.unitCost, 0)));
+          const transportUnit = key === 'transportUnit' ? Math.max(0, Math.round(asNumber(value, 0))) : Math.max(0, Math.round(asNumber(item.transportUnit, 0)));
+          return {
+            ...item,
+            quantity,
+            unitCost,
+            transportUnit,
+            totalCost: quantity * (unitCost + transportUnit),
+          };
+        }
+
+        return { ...item, [key]: value };
+      }),
+    );
+  };
+
+  const handleSaleInlineChange = (id, key, value) => {
+    setSales((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+
+        if (key === 'sale' || key === 'cost') {
+          const sale = key === 'sale' ? Math.max(0, Math.round(asNumber(value, 0))) : Math.max(0, Math.round(asNumber(item.sale, 0)));
+          const cost = key === 'cost' ? Math.max(0, Math.round(asNumber(value, 0))) : Math.max(0, Math.round(asNumber(item.cost, 0)));
+          const profit = Math.max(0, sale - cost);
+          return { ...item, sale, cost, profit, marginPct: sale > 0 ? profit / sale : 0 };
+        }
+
+        return { ...item, [key]: value };
+      }),
+    );
+  };
+
+  const handleSupplierInlineChange = (id, key, value) => {
+    setSuppliers((current) => current.map((item) => (item.id === id ? { ...item, [key]: value } : item)));
   };
 
   const handleAddSale = (event) => {
@@ -701,30 +947,6 @@ function ERPView({
     setSales((current) => [newSale, ...current]);
     setSaleForm(emptySaleForm);
     setFeedback({ type: 'success', text: 'Venta registrada en ERP.' });
-  };
-
-  const handleAddSupplier = (event) => {
-    event.preventDefault();
-
-    const name = supplierForm.name.trim();
-    if (!name) {
-      setFeedback({ type: 'error', text: 'Debes ingresar el nombre del proveedor.' });
-      return;
-    }
-
-    const newSupplier = {
-      id: `prov-${Date.now()}`,
-      name,
-      contact: supplierForm.contact.trim(),
-      phone: supplierForm.phone.trim(),
-      email: supplierForm.email.trim(),
-      status: supplierForm.status,
-      notes: supplierForm.notes.trim(),
-    };
-
-    setSuppliers((current) => [newSupplier, ...current]);
-    setSupplierForm(emptySupplierForm);
-    setFeedback({ type: 'success', text: 'Proveedor agregado.' });
   };
 
   const handleAddCityRate = (event) => {
@@ -772,6 +994,17 @@ function ERPView({
   const topProducts = salesByProduct.slice(0, 5);
   const topClients = salesByClient.slice(0, 5);
   const bottomClients = [...salesByClient].reverse().slice(0, 5).reverse();
+  const suppliersWithRelations = suppliers.map((supplier) => {
+    const supplierId = String(supplier.id || '');
+    const supplierProducts = productsBySupplier.get(supplierId) || [];
+    const supplierPurchases = purchases.filter((purchase) => String(purchase.supplierId || '') === supplierId);
+    return {
+      ...supplier,
+      productsCount: supplierProducts.length,
+      purchasesCount: supplierPurchases.length,
+      productNames: supplierProducts.map((product) => product.product).filter(Boolean),
+    };
+  });
   const dashboardMetrics = [
     { id: 'sales-month', title: 'Ventas del mes', value: formatCurrency(totals.salesTotal) },
     { id: 'profit-month', title: 'Utilidad del mes', value: formatCurrency(totals.profitTotal) },
@@ -940,16 +1173,8 @@ function ERPView({
                 </select>
               </label>
               <label className="field">
-                <span>Deuda actual</span>
-                <input type="number" min="0" step="1" value={clientForm.debt} onChange={updateClientField('debt')} />
-              </label>
-              <label className="field">
                 <span>Meta mensual</span>
                 <input type="number" min="0" step="1" value={clientForm.monthlyTarget} onChange={updateClientField('monthlyTarget')} />
-              </label>
-              <label className="field">
-                <span>Ventas acumuladas</span>
-                <input type="number" min="0" step="1" value={clientForm.accumulatedSales} onChange={updateClientField('accumulatedSales')} />
               </label>
               <label className="field">
                 <span>Progreso meta (0-1)</span>
@@ -999,19 +1224,31 @@ function ERPView({
                     <tr key={client.id}>
                       <td>{client.id}</td>
                       <td>
-                        <strong>{client.name}</strong>
+                        <input value={client.name || ''} onChange={(event) => handleClientInlineChange(client.id, 'name', event.target.value)} />
                         <div className="muted">{client.rut || '-'}</div>
                       </td>
-                      <td>{client.type || '-'}</td>
-                      <td>{client.zone || '-'}</td>
-                      <td>{client.sector || '-'}</td>
-                      <td>{client.contact || '-'}</td>
-                      <td>{client.phone || '-'}</td>
-                      <td>{formatCurrency(client.debt || 0)}</td>
-                      <td>{formatCurrency(client.monthlyTarget || 0)}</td>
-                      <td>{formatCurrency(client.accumulatedSales || 0)}</td>
-                      <td>{formatPercent(client.goalProgress || 0)}</td>
-                      <td>{client.status || 'Activo'}</td>
+                      <td>
+                        <select value={client.type || CLIENT_TYPES[0]} onChange={(event) => handleClientInlineChange(client.id, 'type', event.target.value)}>
+                          {CLIENT_TYPES.map((type) => (
+                            <option key={type} value={type}>{type}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td><input value={client.zone || ''} onChange={(event) => handleClientInlineChange(client.id, 'zone', event.target.value)} /></td>
+                      <td><input value={client.sector || ''} onChange={(event) => handleClientInlineChange(client.id, 'sector', event.target.value)} /></td>
+                      <td><input value={client.contact || ''} onChange={(event) => handleClientInlineChange(client.id, 'contact', event.target.value)} /></td>
+                      <td><input value={client.phone || ''} onChange={(event) => handleClientInlineChange(client.id, 'phone', event.target.value)} /></td>
+                      <td><input type="number" min="0" step="1" value={client.debt ?? 0} onChange={(event) => handleClientInlineChange(client.id, 'debt', event.target.value)} /></td>
+                      <td><input type="number" min="0" step="1" value={client.monthlyTarget ?? 0} onChange={(event) => handleClientInlineChange(client.id, 'monthlyTarget', event.target.value)} /></td>
+                      <td><input type="number" min="0" step="1" value={client.accumulatedSales ?? 0} onChange={(event) => handleClientInlineChange(client.id, 'accumulatedSales', event.target.value)} /></td>
+                      <td><input type="number" min="0" max="1" step="0.01" value={client.goalProgress ?? 0} onChange={(event) => handleClientInlineChange(client.id, 'goalProgress', event.target.value)} /></td>
+                      <td>
+                        <select value={client.status || 'Activo'} onChange={(event) => handleClientInlineChange(client.id, 'status', event.target.value)}>
+                          {CLIENT_STATUSES.map((status) => (
+                            <option key={status} value={status}>{status}</option>
+                          ))}
+                        </select>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1108,16 +1345,22 @@ function ERPView({
                 <tbody>
                   {routes.map((route) => (
                     <tr key={route.id}>
-                      <td>{route.date || '-'}</td>
-                      <td>{route.zone || '-'}</td>
-                      <td>{route.sector || '-'}</td>
-                      <td>{route.seller || '-'}</td>
-                      <td>{formatInteger(route.visitedClients || 0)}</td>
-                      <td>{formatInteger(route.clientsWithOrder || 0)}</td>
+                      <td><input type="date" value={route.date || ''} onChange={(event) => handleRouteInlineChange(route.id, 'date', event.target.value)} /></td>
+                      <td><input value={route.zone || ''} onChange={(event) => handleRouteInlineChange(route.id, 'zone', event.target.value)} /></td>
+                      <td><input value={route.sector || ''} onChange={(event) => handleRouteInlineChange(route.id, 'sector', event.target.value)} /></td>
+                      <td>
+                        <select value={route.seller || ROUTE_SELLERS[0]} onChange={(event) => handleRouteInlineChange(route.id, 'seller', event.target.value)}>
+                          {ROUTE_SELLERS.map((seller) => (
+                            <option key={seller} value={seller}>{seller}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td><input type="number" min="0" step="1" value={route.visitedClients ?? 0} onChange={(event) => handleRouteInlineChange(route.id, 'visitedClients', event.target.value)} /></td>
+                      <td><input type="number" min="0" step="1" value={route.clientsWithOrder ?? 0} onChange={(event) => handleRouteInlineChange(route.id, 'clientsWithOrder', event.target.value)} /></td>
                       <td>{formatPercent(route.effectivenessPct || 0)}</td>
-                      <td>{formatCurrency(route.sales || 0)}</td>
-                      <td>{formatInteger(route.kmRoute || 0)}</td>
-                      <td>{formatCurrency(route.fuel || 0)}</td>
+                      <td><input type="number" min="0" step="1" value={route.sales ?? 0} onChange={(event) => handleRouteInlineChange(route.id, 'sales', event.target.value)} /></td>
+                      <td><input type="number" min="0" step="1" value={route.kmRoute ?? 0} onChange={(event) => handleRouteInlineChange(route.id, 'kmRoute', event.target.value)} /></td>
+                      <td><input type="number" min="0" step="1" value={route.fuel ?? 0} onChange={(event) => handleRouteInlineChange(route.id, 'fuel', event.target.value)} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -1258,7 +1501,14 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Proveedor</span>
-                <input value={purchaseForm.supplier} onChange={updatePurchaseField('supplier')} />
+                <select value={purchaseForm.supplierId} onChange={handlePurchaseSupplierChange} required>
+                  <option value="">Selecciona proveedor</option>
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.name}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="field">
                 <span>Orden compra</span>
@@ -1266,19 +1516,31 @@ function ERPView({
               </label>
               <label className="field">
                 <span>SKU</span>
-                <input value={purchaseForm.sku} onChange={updatePurchaseField('sku')} />
+                <input value={purchaseForm.productSku} readOnly placeholder="Se completa al elegir producto" />
               </label>
               <label className="field field-wide">
                 <span>Producto</span>
-                <input value={purchaseForm.product} onChange={updatePurchaseField('product')} />
+                <select
+                  value={purchaseForm.productSku}
+                  onChange={updatePurchaseField('productSku')}
+                  disabled={!purchaseForm.supplierId}
+                  required
+                >
+                  <option value="">Selecciona producto</option>
+                  {purchaseProductsForSupplier.map((product) => (
+                    <option key={product.sku} value={product.sku}>
+                      {product.product} ({product.sku})
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="field">
                 <span>Cantidad</span>
-                <input type="number" min="1" step="1" value={purchaseForm.quantity} onChange={updatePurchaseField('quantity')} />
+                <input type="number" min="1" step="1" value={purchaseForm.quantity} onChange={updatePurchaseField('quantity')} required />
               </label>
               <label className="field">
                 <span>Costo unitario</span>
-                <input type="number" min="0" step="1" value={purchaseForm.unitCost} onChange={updatePurchaseField('unitCost')} />
+                <input type="number" min="0" step="1" value={purchaseForm.unitCost} onChange={updatePurchaseField('unitCost')} required />
               </label>
               <label className="field">
                 <span>Transporte unidad</span>
@@ -1335,17 +1597,30 @@ function ERPView({
                 <tbody>
                   {purchases.map((purchase) => (
                     <tr key={purchase.id}>
-                      <td>{purchase.date || '-'}</td>
-                      <td>{purchase.supplier || '-'}</td>
-                      <td>{purchase.purchaseOrder || '-'}</td>
+                      <td><input type="date" value={purchase.date || ''} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'date', event.target.value)} /></td>
+                      <td>
+                        <select value={purchase.supplierId || ''} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'supplierId', event.target.value)}>
+                          <option value="">Selecciona proveedor</option>
+                          {suppliers.map((supplier) => (
+                            <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td><input value={purchase.purchaseOrder || ''} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'purchaseOrder', event.target.value)} /></td>
                       <td>{purchase.sku || '-'}</td>
                       <td>{purchase.product || '-'}</td>
-                      <td>{formatInteger(purchase.quantity || 0)}</td>
-                      <td>{formatCurrency(purchase.unitCost || 0)}</td>
-                      <td>{formatCurrency(purchase.transportUnit || 0)}</td>
+                      <td><input type="number" min="1" step="1" value={purchase.quantity ?? 1} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'quantity', event.target.value)} /></td>
+                      <td><input type="number" min="0" step="1" value={purchase.unitCost ?? 0} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'unitCost', event.target.value)} /></td>
+                      <td><input type="number" min="0" step="1" value={purchase.transportUnit ?? 0} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'transportUnit', event.target.value)} /></td>
                       <td>{formatCurrency(purchase.totalCost || 0)}</td>
-                      <td>{purchase.reception || '-'}</td>
-                      <td>{purchase.doc || '-'}</td>
+                      <td>
+                        <select value={purchase.reception || 'Recibido'} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'reception', event.target.value)}>
+                          {RECEPTION_STATUSES.map((status) => (
+                            <option key={status} value={status}>{status}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td><input value={purchase.doc || ''} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'doc', event.target.value)} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -1365,8 +1640,47 @@ function ERPView({
 
             <div className="form-grid">
               <label className="field">
+                <span>Proveedor</span>
+                <select value={productForm.createSupplier} onChange={updateProductField('createSupplier')}>
+                  <option value="false">Usar proveedor existente</option>
+                  <option value="true">Crear proveedor nuevo</option>
+                </select>
+              </label>
+              {productForm.createSupplier === 'true' ? (
+                <>
+                  <label className="field field-wide">
+                    <span>Nombre proveedor nuevo</span>
+                    <input value={productForm.newSupplierName} onChange={updateProductField('newSupplierName')} required />
+                  </label>
+                  <label className="field">
+                    <span>Contacto proveedor</span>
+                    <input value={productForm.newSupplierContact} onChange={updateProductField('newSupplierContact')} />
+                  </label>
+                  <label className="field">
+                    <span>Telefono proveedor</span>
+                    <input value={productForm.newSupplierPhone} onChange={updateProductField('newSupplierPhone')} />
+                  </label>
+                  <label className="field field-wide">
+                    <span>Email proveedor</span>
+                    <input value={productForm.newSupplierEmail} onChange={updateProductField('newSupplierEmail')} />
+                  </label>
+                </>
+              ) : (
+                <label className="field field-wide">
+                  <span>Proveedor existente</span>
+                  <select value={productForm.supplierId} onChange={updateProductField('supplierId')} required>
+                    <option value="">Selecciona proveedor</option>
+                    {suppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="field">
                 <span>SKU</span>
-                <input value={productForm.sku} onChange={updateProductField('sku')} />
+                <input value={productForm.sku} onChange={updateProductField('sku')} required />
               </label>
               <label className="field">
                 <span>Codigo barra</span>
@@ -1378,7 +1692,7 @@ function ERPView({
               </label>
               <label className="field field-wide">
                 <span>Nombre producto</span>
-                <input value={productForm.product} onChange={updateProductField('product')} />
+                <input value={productForm.product} onChange={updateProductField('product')} required />
               </label>
               <label className="field">
                 <span>Marca</span>
@@ -1401,8 +1715,34 @@ function ERPView({
                 <input type="number" min="0" step="1" value={productForm.salePriceBase} onChange={updateProductField('salePriceBase')} />
               </label>
               <label className="field">
-                <span>Stock actual</span>
-                <input type="number" min="0" step="1" value={productForm.stock} onChange={updateProductField('stock')} />
+                <span>Cantidad compra inicial</span>
+                <input type="number" min="1" step="1" value={productForm.initialPurchaseQuantity} onChange={updateProductField('initialPurchaseQuantity')} required />
+              </label>
+              <label className="field">
+                <span>Costo unitario inicial</span>
+                <input type="number" min="0" step="1" value={productForm.initialPurchaseUnitCost} onChange={updateProductField('initialPurchaseUnitCost')} required />
+              </label>
+              <label className="field">
+                <span>Transporte unidad inicial</span>
+                <input type="number" min="0" step="1" value={productForm.initialPurchaseTransportUnit} onChange={updateProductField('initialPurchaseTransportUnit')} />
+              </label>
+              <label className="field">
+                <span>OC inicial</span>
+                <input value={productForm.initialPurchaseOrder} onChange={updateProductField('initialPurchaseOrder')} />
+              </label>
+              <label className="field">
+                <span>Documento inicial</span>
+                <input value={productForm.initialPurchaseDoc} onChange={updateProductField('initialPurchaseDoc')} />
+              </label>
+              <label className="field">
+                <span>Recepcion inicial</span>
+                <select value={productForm.initialPurchaseReception} onChange={updateProductField('initialPurchaseReception')}>
+                  {RECEPTION_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="field">
                 <span>Stock minimo</span>
@@ -1421,6 +1761,10 @@ function ERPView({
                     </option>
                   ))}
                 </select>
+              </label>
+              <label className="field field-wide">
+                <span>Observacion compra inicial</span>
+                <textarea rows="3" value={productForm.initialPurchaseObservation} onChange={updateProductField('initialPurchaseObservation')} />
               </label>
             </div>
 
@@ -1612,17 +1956,29 @@ function ERPView({
                 <tbody>
                   {sales.map((row) => (
                     <tr key={row.id}>
-                      <td>{row.date || '-'}</td>
-                      <td>{row.client || '-'}</td>
-                      <td>{row.zone || '-'}</td>
-                      <td>{row.orderCode || '-'}</td>
-                      <td>{row.product || '-'}</td>
-                      <td>{formatCurrency(row.sale || 0)}</td>
-                      <td>{formatCurrency(row.cost || 0)}</td>
+                      <td><input type="date" value={row.date || ''} onChange={(event) => handleSaleInlineChange(row.id, 'date', event.target.value)} /></td>
+                      <td><input value={row.client || ''} onChange={(event) => handleSaleInlineChange(row.id, 'client', event.target.value)} /></td>
+                      <td><input value={row.zone || ''} onChange={(event) => handleSaleInlineChange(row.id, 'zone', event.target.value)} /></td>
+                      <td><input value={row.orderCode || ''} onChange={(event) => handleSaleInlineChange(row.id, 'orderCode', event.target.value)} /></td>
+                      <td><input value={row.product || ''} onChange={(event) => handleSaleInlineChange(row.id, 'product', event.target.value)} /></td>
+                      <td><input type="number" min="0" step="1" value={row.sale ?? 0} onChange={(event) => handleSaleInlineChange(row.id, 'sale', event.target.value)} /></td>
+                      <td><input type="number" min="0" step="1" value={row.cost ?? 0} onChange={(event) => handleSaleInlineChange(row.id, 'cost', event.target.value)} /></td>
                       <td>{formatCurrency(row.profit || 0)}</td>
                       <td>{formatPercent(row.marginPct || 0)}</td>
-                      <td>{row.paymentMethod || '-'}</td>
-                      <td>{row.dispatchStatus || '-'}</td>
+                      <td>
+                        <select value={row.paymentMethod || PAYMENT_METHODS[0]} onChange={(event) => handleSaleInlineChange(row.id, 'paymentMethod', event.target.value)}>
+                          {PAYMENT_METHODS.map((method) => (
+                            <option key={method} value={method}>{method}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        <select value={row.dispatchStatus || DISPATCH_STATUSES[0]} onChange={(event) => handleSaleInlineChange(row.id, 'dispatchStatus', event.target.value)}>
+                          {DISPATCH_STATUSES.map((status) => (
+                            <option key={status} value={status}>{status}</option>
+                          ))}
+                        </select>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1634,55 +1990,13 @@ function ERPView({
 
       {tab === 'proveedores' ? (
         <div className="erp-content-layout">
-          <form className="panel erp-form" onSubmit={handleAddSupplier}>
-            <div className="panel-title">
-              <h3>Alta de proveedor</h3>
-              <p className="muted">Gestion de contactos y disponibilidad de abastecimiento.</p>
-            </div>
-
-            <div className="form-grid">
-              <label className="field field-wide">
-                <span>Nombre proveedor</span>
-                <input value={supplierForm.name} onChange={updateSupplierField('name')} />
-              </label>
-              <label className="field">
-                <span>Contacto</span>
-                <input value={supplierForm.contact} onChange={updateSupplierField('contact')} />
-              </label>
-              <label className="field">
-                <span>Telefono</span>
-                <input value={supplierForm.phone} onChange={updateSupplierField('phone')} />
-              </label>
-              <label className="field field-wide">
-                <span>Email</span>
-                <input value={supplierForm.email} onChange={updateSupplierField('email')} />
-              </label>
-              <label className="field">
-                <span>Estado</span>
-                <select value={supplierForm.status} onChange={updateSupplierField('status')}>
-                  {SUPPLIER_STATUSES.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field field-wide">
-                <span>Notas</span>
-                <textarea rows="3" value={supplierForm.notes} onChange={updateSupplierField('notes')} />
-              </label>
-            </div>
-
-            <button className="button button-primary" type="submit">
-              Guardar proveedor
-            </button>
-          </form>
-
           <div className="panel erp-list-panel">
             <div className="panel-title">
               <h3>Maestro de proveedores</h3>
-              <p className="muted">Referencia de proveedores activos y contactos directos.</p>
+              <p className="muted">Consulta de proveedores, sus productos y compras relacionadas.</p>
             </div>
+
+            <p className="muted">Los proveedores nuevos se crean desde Productos al registrar producto con compra inicial.</p>
 
             <div className="table-wrap">
               <table className="items-table">
@@ -1693,18 +2007,32 @@ function ERPView({
                     <th>Telefono</th>
                     <th>Email</th>
                     <th>Estado</th>
+                    <th>Productos</th>
+                    <th>Compras</th>
                     <th>Notas</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {suppliers.map((supplier) => (
+                  {suppliersWithRelations.map((supplier) => (
                     <tr key={supplier.id}>
-                      <td>{supplier.name || '-'}</td>
-                      <td>{supplier.contact || '-'}</td>
-                      <td>{supplier.phone || '-'}</td>
-                      <td>{supplier.email || '-'}</td>
-                      <td>{supplier.status || '-'}</td>
-                      <td>{supplier.notes || '-'}</td>
+                      <td><input value={supplier.name || ''} onChange={(event) => handleSupplierInlineChange(supplier.id, 'name', event.target.value)} /></td>
+                      <td><input value={supplier.contact || ''} onChange={(event) => handleSupplierInlineChange(supplier.id, 'contact', event.target.value)} /></td>
+                      <td><input value={supplier.phone || ''} onChange={(event) => handleSupplierInlineChange(supplier.id, 'phone', event.target.value)} /></td>
+                      <td><input value={supplier.email || ''} onChange={(event) => handleSupplierInlineChange(supplier.id, 'email', event.target.value)} /></td>
+                      <td>
+                        <select value={supplier.status || 'Activo'} onChange={(event) => handleSupplierInlineChange(supplier.id, 'status', event.target.value)}>
+                          {SUPPLIER_STATUSES.map((status) => (
+                            <option key={status} value={status}>{status}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        {supplier.productsCount > 0
+                          ? `${supplier.productsCount} (${supplier.productNames.slice(0, 2).join(', ')}${supplier.productsCount > 2 ? ', ...' : ''})`
+                          : '0'}
+                      </td>
+                      <td>{supplier.purchasesCount}</td>
+                      <td><input value={supplier.notes || ''} onChange={(event) => handleSupplierInlineChange(supplier.id, 'notes', event.target.value)} /></td>
                     </tr>
                   ))}
                 </tbody>
