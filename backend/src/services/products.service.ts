@@ -52,6 +52,8 @@ type UpdateProductPayload = {
 };
 
 const numberValue = (value: unknown) => Number(value) || 0;
+const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isUuid = (value: string) => uuidRegex.test(String(value || ''));
 
 function toProduct(row: typeof products.$inferSelect) {
   const purchaseCost = numberValue(row.purchaseCost);
@@ -93,7 +95,7 @@ export const productsService = {
     const row = await db
       .select()
       .from(products)
-      .where(or(eq(products.id, id), eq(products.sku, id)))
+      .where(isUuid(id) ? or(eq(products.id, id), eq(products.sku, id)) : eq(products.sku, id))
       .limit(1);
     if (!row[0]) return detailStub('products', id);
     return toProduct(row[0]);
@@ -182,7 +184,7 @@ export const productsService = {
     const currentRow = await db
       .select()
       .from(products)
-      .where(or(eq(products.id, id), eq(products.sku, id)))
+      .where(isUuid(id) ? or(eq(products.id, id), eq(products.sku, id)) : eq(products.sku, id))
       .limit(1);
     const current = currentRow[0];
     if (!current) return null;
@@ -210,7 +212,7 @@ export const productsService = {
     return row[0] ? toProduct(row[0]) : null;
   },
   remove: async (id: string) => {
-    await db.delete(products).where(or(eq(products.id, id), eq(products.sku, id)));
+    await db.delete(products).where(isUuid(id) ? or(eq(products.id, id), eq(products.sku, id)) : eq(products.sku, id));
     return { deleted: true, id };
   },
 };

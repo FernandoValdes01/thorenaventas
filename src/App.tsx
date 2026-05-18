@@ -54,7 +54,7 @@ const STORAGE_KEYS = {
   erpCityRates: 'thorena.erp-city-rates',
 };
 
-const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pagado', 'Pendiente', 'Anulado'];
+const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pendiente de pago', 'Pagado', 'Anulado'];
 const FINAL_ORDER_STATUSES = new Set(['Pagado', 'Anulado', 'Terminado']);
 const ORDER_DETAIL_EXPAND_THRESHOLD = 4;
 
@@ -203,7 +203,7 @@ function normalizeItems(items) {
 function normalizeOrder(order) {
   const rawStatus = String(order?.status || '').trim();
   const mappedStatus = rawStatus === 'Terminado' ? 'Pagado' : rawStatus;
-  const status = ERP_ORDER_STATUSES.includes(mappedStatus) ? mappedStatus : 'Pendiente';
+  const status = ERP_ORDER_STATUSES.includes(mappedStatus) ? mappedStatus : 'Pedido';
   const items = normalizeItems(order?.items);
   const customerContact = String(order?.customerNumber || order?.contactPhone || '');
   const subtotalBeforeDiscount = items.reduce((sum, item) => sum + (item.subtotalBeforeScale || item.subtotal), 0);
@@ -544,6 +544,10 @@ function OrderCard({ order, onUpdateStatus }) {
   const totalUnits = order.items.reduce((sum, item) => sum + item.quantity, 0);
   const lineDiscountTotal = order.items.reduce((sum, item) => sum + (item.discountAmount || 0), 0);
   const statusLocked = FINAL_ORDER_STATUSES.has(order.status);
+  const isCreditOrder = ['credito 7 dias', 'credito 15 dias'].includes(String(order.paymentMethod || '').trim().toLowerCase());
+  const availableStatuses = isCreditOrder
+    ? ERP_ORDER_STATUSES
+    : ERP_ORDER_STATUSES.filter((status) => status !== 'Pendiente de pago');
 
   return (
     <article className={order.status === 'Pagado' ? 'order-card panel order-card-done' : 'order-card panel'}>
@@ -677,7 +681,7 @@ function OrderCard({ order, onUpdateStatus }) {
         <label className="field status-select-field">
           <span>Estado ERP</span>
           <select value={order.status} onChange={(event) => onUpdateStatus(order.code, event.target.value)} disabled={statusLocked}>
-            {ERP_ORDER_STATUSES.map((status) => (
+            {availableStatuses.map((status) => (
               <option key={status} value={status}>
                 {status}
               </option>
@@ -701,6 +705,12 @@ function OrdersView({ orders, setOrders, sales, setSales, productsFull }) {
 
     const currentOrder = orders.find((order) => order.code === code);
     if (!currentOrder || FINAL_ORDER_STATUSES.has(currentOrder.status)) {
+      return;
+    }
+
+    const isCreditOrder = ['credito 7 dias', 'credito 15 dias'].includes(String(currentOrder.paymentMethod || '').trim().toLowerCase());
+    if (nextStatus === 'Pendiente de pago' && !isCreditOrder) {
+      setFeedback({ type: 'error', text: 'Pendiente de pago solo aplica para credito 7 o 15 dias.' });
       return;
     }
 

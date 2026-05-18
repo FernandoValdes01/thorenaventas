@@ -1,6 +1,6 @@
 import { desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
-import { clients, orderItems, orders, products, sales } from '../db/schema';
+import { clients, cobranzas, orderItems, orders, products, sales } from '../db/schema';
 
 type OrderItemPayload = {
   productId: string;
@@ -55,6 +55,10 @@ type OrderPayload = {
 
 const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const numberValue = (value: unknown) => Number(value) || 0;
+const isUuid = (value: string) => uuidRegex.test(String(value || ''));
+const isCreditPayment = (paymentMethod: string) => ['credito 7 dias', 'credito 15 dias'].includes(String(paymentMethod || '').trim().toLowerCase());
+const creditDaysByMethod = (paymentMethod: string) =>
+  String(paymentMethod || '').trim().toLowerCase() === 'credito 15 dias' ? 15 : 7;
 
 function iso(value: Date | string | null | undefined) {
   if (!value) return new Date().toISOString();
@@ -174,7 +178,11 @@ export const ordersService = {
   },
 
   async getById(id: string) {
-    const row = await db.select().from(orders).where(or(eq(orders.id, id), eq(orders.code, id))).limit(1);
+    const row = await db
+      .select()
+      .from(orders)
+      .where(isUuid(id) ? or(eq(orders.id, id), eq(orders.code, id)) : eq(orders.code, id))
+      .limit(1);
     if (!row[0]) return null;
     const items = await db.select().from(orderItems).where(eq(orderItems.orderId, row[0].id));
     return toOrder(row[0], items);
@@ -239,7 +247,7 @@ export const ordersService = {
         const productRow = await tx
           .select()
           .from(products)
-          .where(or(eq(products.id, item.productId), eq(products.sku, item.productId)))
+          .where(isUuid(item.productId) ? or(eq(products.id, item.productId), eq(products.sku, item.productId)) : eq(products.sku, item.productId))
           .limit(1);
         const product = productRow[0];
         if (!product) throw new Error(`Producto no existe para ${item.productName}`);
@@ -287,9 +295,17 @@ export const ordersService = {
 
   async updateStatus(id: string, status: string) {
     return db.transaction(async (tx) => {
-      const row = await tx.select().from(orders).where(or(eq(orders.id, id), eq(orders.code, id))).limit(1);
+      const row = await tx
+        .select()
+        .from(orders)
+        .where(isUuid(id) ? or(eq(orders.id, id), eq(orders.code, id)) : eq(orders.code, id))
+        .limit(1);
       const current = row[0];
       if (!current) return null;
+
+      if (status === 'Pendiente de pago' && !isCreditPayment(current.paymentMethod)) {
+        throw new Error('Pendiente de pago solo aplica para credito 7 o 15 dias.');
+      }
 
       const updated = await tx
         .update(orders)
@@ -300,6 +316,91 @@ export const ordersService = {
 
       if (status === 'Pagado') {
         await createSalesForOrder(tx, updated[0], items);
+
+        if (isCreditPayment(updated[0].paymentMethod)) {
+          const pendingCobranza = await tx
+            .select()
+            .from(cobranzas)
+            .where(eq(cobranzas.document, updated[0].code))
+            .limit(1);
+          const cobranza = pendingCobranza[0];
+          if (cobranza) {
+            const amount = Math.max(0, numberValue(cobranza.balance));
+            await tx
+              .update(cobranzas)
+              .set({ paidAmount: String(numberValue(cobranza.paidAmount) + amount), balance: '0', status: 'Pagada', updatedAt: sql`now()` })
+              .where(eq(cobranzas.id, cobranza.id));
+
+            if (updated[0].clientId) {
+              const clientRow = await tx.select().from(clients).where(eq(clients.id, updated[0].clientId)).limit(1);
+              const client = clientRow[0];
+              if (client) {
+                const nextDebt = Math.max(0, numberValue(client.debt) - amount);
+                await tx.update(clients).set({ debt: String(nextDebt), updatedAt: sql`now()` }).where(eq(clients.id, updated[0].clientId));
+              }
+            }
+          }
+        }
+      }
+
+      if (status === 'Pendiente de pago' && isCreditPayment(updated[0].paymentMethod)) {
+        const totalAmount = Math.max(0, numberValue(updated[0].total));
+        const issueDate = new Date();
+        const dueDate = new Date(issueDate);
+        dueDate.setDate(dueDate.getDate() + creditDaysByMethod(updated[0].paymentMethod));
+
+        const cobranzaRows = await tx.select().from(cobranzas).where(eq(cobranzas.document, updated[0].code)).limit(1);
+        const cobranza = cobranzaRows[0];
+
+        if (cobranza) {
+          const previousBalance = Math.max(0, numberValue(cobranza.balance));
+          await tx
+            .update(cobranzas)
+            .set({
+              clientId: updated[0].clientId,
+              clientName: updated[0].customerName,
+              issueDate,
+              dueDate,
+              amount: String(totalAmount),
+              paidAmount: '0',
+              balance: String(totalAmount),
+              status: 'Pendiente',
+              notes: `Credito generado desde pedido ${updated[0].code}`,
+              updatedAt: sql`now()`,
+            })
+            .where(eq(cobranzas.id, cobranza.id));
+
+          if (updated[0].clientId) {
+            const clientRow = await tx.select().from(clients).where(eq(clients.id, updated[0].clientId)).limit(1);
+            const client = clientRow[0];
+            if (client) {
+              const nextDebt = Math.max(0, numberValue(client.debt) - previousBalance + totalAmount);
+              await tx.update(clients).set({ debt: String(nextDebt), updatedAt: sql`now()` }).where(eq(clients.id, updated[0].clientId));
+            }
+          }
+        } else {
+          await tx.insert(cobranzas).values({
+            clientId: updated[0].clientId,
+            clientName: updated[0].customerName,
+            document: updated[0].code,
+            issueDate,
+            dueDate,
+            amount: String(totalAmount),
+            paidAmount: '0',
+            balance: String(totalAmount),
+            status: 'Pendiente',
+            notes: `Credito generado desde pedido ${updated[0].code}`,
+          });
+
+          if (updated[0].clientId) {
+            const clientRow = await tx.select().from(clients).where(eq(clients.id, updated[0].clientId)).limit(1);
+            const client = clientRow[0];
+            if (client) {
+              const nextDebt = Math.max(0, numberValue(client.debt) + totalAmount);
+              await tx.update(clients).set({ debt: String(nextDebt), updatedAt: sql`now()` }).where(eq(clients.id, updated[0].clientId));
+            }
+          }
+        }
       }
 
       return toOrder(updated[0], items);

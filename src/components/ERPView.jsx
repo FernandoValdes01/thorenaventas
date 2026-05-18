@@ -798,6 +798,11 @@ function ERPView({
     const unitProfit = Math.max(0, salePriceBase - finalCost);
     const marginPct = salePriceBase > 0 ? unitProfit / salePriceBase : 0;
 
+    if (salePriceBase < finalCost) {
+      setFeedback({ type: 'error', text: 'El precio minimo/base de venta no puede ser menor al costo real unitario.' });
+      return;
+    }
+
     const supplierIdForBackend = uuidRegex.test(supplierId) ? supplierId : undefined;
     const fallbackSupplier = suppliers.find((item) => String(item.id) === supplierId);
 
@@ -832,8 +837,8 @@ function ERPView({
       location: productForm.location.trim(),
       initialPurchase: {
         quantity: initialPurchaseQuantity,
-        unitCost: Math.max(0, Math.round(asNumber(productForm.initialPurchaseUnitCost, 0))),
-        transportUnit: Math.max(0, Math.round(asNumber(productForm.initialPurchaseTransportUnit, 0))),
+        unitCost: purchaseCost,
+        transportUnit,
         purchaseOrder: productForm.initialPurchaseOrder.trim(),
         doc: productForm.initialPurchaseDoc.trim(),
         reception: productForm.initialPurchaseReception,
@@ -885,8 +890,8 @@ function ERPView({
       status: productForm.status,
     };
 
-    const initialPurchaseUnitCost = Math.max(0, Math.round(asNumber(productForm.initialPurchaseUnitCost, 0)));
-    const initialPurchaseTransportUnit = Math.max(0, Math.round(asNumber(productForm.initialPurchaseTransportUnit, 0)));
+    const initialPurchaseUnitCost = purchaseCost;
+    const initialPurchaseTransportUnit = transportUnit;
     const initialPurchase = {
       id: `comp-${Date.now()}`,
       date: todayISO(),
@@ -1163,7 +1168,8 @@ function ERPView({
       return;
     }
 
-    const rate = clamp(asNumber(cityRateForm.rate, 0), 0, 0.95);
+    const ratePercent = clamp(asNumber(cityRateForm.rate, 0), 0, 95);
+    const rate = ratePercent / 100;
     const normalizedKey = city.toLowerCase();
 
     const result = await cityRatesService.create({ city, rate });
@@ -1188,13 +1194,13 @@ function ERPView({
   };
 
   const handleCityRateInlineChange = (id, key, value) => {
-    cityRatesService.update(id, { [key]: key === 'rate' ? clamp(asNumber(value, 0), 0, 0.95) : value });
+    cityRatesService.update(id, { [key]: key === 'rate' ? clamp(asNumber(value, 0), 0, 95) / 100 : value });
 
     setCityRates((current) =>
       current.map((item) => {
         if (item.id !== id) return item;
         if (key === 'rate') {
-          return { ...item, rate: clamp(asNumber(value, 0), 0, 0.95) };
+          return { ...item, rate: clamp(asNumber(value, 0), 0, 95) / 100 };
         }
         return { ...item, city: value };
       }),
@@ -1390,10 +1396,6 @@ function ERPView({
               <label className="field">
                 <span>Meta mensual</span>
                 <input type="number" min="0" step="1" value={clientForm.monthlyTarget} onChange={updateClientField('monthlyTarget')} placeholder="Ej: 350000" />
-              </label>
-              <label className="field">
-                <span>Progreso meta (0-1)</span>
-                <input type="number" min="0" max="1" step="0.01" value={clientForm.goalProgress} onChange={updateClientField('goalProgress')} />
               </label>
               <label className="field">
                 <span>Limite credito</span>
@@ -1849,7 +1851,7 @@ function ERPView({
         <div className="erp-content-layout">
           <form className="panel erp-form" onSubmit={handleAddProduct}>
             <div className="panel-title">
-              <h3>Alta de producto completo</h3>
+              <h3>Agregar productos nuevos</h3>
               <p className="muted">SKU, costos, margen, stock y estado operativo.</p>
             </div>
 
@@ -1926,15 +1928,15 @@ function ERPView({
                 <input value={productForm.unit} onChange={updateProductField('unit')} placeholder="Ej: Unidad" />
               </label>
               <label className="field">
-                <span>Costo compra</span>
+                <span>Costo unitario de compra</span>
                 <input type="number" min="0" step="1" value={productForm.purchaseCost} onChange={updateProductField('purchaseCost')} />
               </label>
               <label className="field">
-                <span>Transporte unidad</span>
+                <span>Transporte por unidad</span>
                 <input type="number" min="0" step="1" value={productForm.transportUnit} onChange={updateProductField('transportUnit')} />
               </label>
               <label className="field">
-                <span>Precio venta base</span>
+                <span>Precio minimo/base de venta</span>
                 <input type="number" min="0" step="1" value={productForm.salePriceBase} onChange={updateProductField('salePriceBase')} />
               </label>
               <label className="field">
@@ -1962,19 +1964,19 @@ function ERPView({
               <div className="erp-form-section-title">3. Compra inicial</div>
               <div className="form-grid">
               <label className="field">
-                <span>Cantidad compra inicial</span>
+                <span>Cantidad comprada inicialmente</span>
                 <input type="number" min="1" step="1" value={productForm.initialPurchaseQuantity} onChange={updateProductField('initialPurchaseQuantity')} required />
               </label>
-              <label className="field">
-                <span>Costo unitario inicial</span>
-                <input type="number" min="0" step="1" value={productForm.initialPurchaseUnitCost} onChange={updateProductField('initialPurchaseUnitCost')} required />
+              <label className="field field-wide">
+                <span>Costo real unitario (compra + transporte)</span>
+                <input
+                  type="text"
+                  value={formatCurrency(Math.max(0, Math.round(asNumber(productForm.purchaseCost, 0) + asNumber(productForm.transportUnit, 0))))}
+                  readOnly
+                />
               </label>
               <label className="field">
-                <span>Transporte unidad inicial</span>
-                <input type="number" min="0" step="1" value={productForm.initialPurchaseTransportUnit} onChange={updateProductField('initialPurchaseTransportUnit')} />
-              </label>
-              <label className="field">
-                <span>OC inicial</span>
+                <span>Orden de compra inicial</span>
                 <input value={productForm.initialPurchaseOrder} onChange={updateProductField('initialPurchaseOrder')} />
               </label>
               <label className="field">
@@ -2286,8 +2288,8 @@ function ERPView({
                 <input value={cityRateForm.city} onChange={updateCityRateField('city')} placeholder="Ej: Pucon" />
               </label>
               <label className="field">
-                <span>Tarifa (0-0.95)</span>
-                <input type="number" min="0" max="0.95" step="0.005" value={cityRateForm.rate} onChange={updateCityRateField('rate')} />
+                <span>Tarifa (%)</span>
+                <input type="number" min="0" max="95" step="0.1" value={cityRateForm.rate} onChange={updateCityRateField('rate')} />
               </label>
             </div>
 
@@ -2321,9 +2323,9 @@ function ERPView({
                         <input
                           type="number"
                           min="0"
-                          max="0.95"
-                          step="0.005"
-                          value={row.rate ?? 0}
+                          max="95"
+                          step="0.1"
+                          value={Math.round((row.rate ?? 0) * 1000) / 10}
                           onChange={(event) => handleCityRateInlineChange(row.id, 'rate', event.target.value)}
                         />
                       </td>

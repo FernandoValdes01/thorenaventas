@@ -27,7 +27,11 @@ export const ordersRoutes = new Hono()
       return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message || 'Estado invalido.', 400);
     }
 
-    return ok(c, await ordersService.updateStatus(c.req.param('id'), parsed.data.status));
+    try {
+      return ok(c, await ordersService.updateStatus(c.req.param('id'), parsed.data.status));
+    } catch (error) {
+      return fail(c, 'ORDER_STATUS_FAILED', error instanceof Error ? error.message : 'No se pudo actualizar estado.', 400);
+    }
   })
   .patch('/:id', (c) => ok(c, { updated: true, id: c.req.param('id') }))
   .delete('/:id', (c) => ok(c, { deleted: true, id: c.req.param('id') }));
