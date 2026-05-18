@@ -6,6 +6,7 @@ type AuthContextValue = {
   session: AuthSession;
   loading: boolean;
   refreshSession: () => Promise<void>;
+  clearSession: () => void;
 };
 
 const defaultSession: AuthSession = {
@@ -17,6 +18,7 @@ export const AuthContext = createContext<AuthContextValue>({
   session: defaultSession,
   loading: false,
   refreshSession: async () => undefined,
+  clearSession: () => undefined,
 });
 
 export function AuthProvider({ children }: PropsWithChildren) {
@@ -42,7 +44,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
     refreshSession();
   }, []);
 
-  const value = useMemo(() => ({ session, loading, refreshSession }), [session, loading]);
+  const clearSession = () => {
+    setSession(defaultSession);
+    setLoading(false);
+  };
+
+  const value = useMemo(() => ({ session, loading, refreshSession, clearSession }), [session, loading]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

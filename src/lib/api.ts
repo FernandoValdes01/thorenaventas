@@ -36,16 +36,12 @@ async function request<T>(path: string, method: HttpMethod, body?: unknown): Pro
       body: body ? JSON.stringify(body) : undefined,
     });
 
+    if (response.status === 204) {
+      return { success: true, data: undefined as T };
+    }
+
     const contentType = response.headers.get('content-type') || '';
-    const payload = contentType.includes('application/json')
-      ? (await response.json())
-      : ({
-          success: false,
-          error: {
-            code: 'INVALID_RESPONSE',
-            message: 'Respuesta invalida del servidor.',
-          },
-        } as ApiResponse<T>);
+    const payload = contentType.includes('application/json') ? await response.json() : null;
 
     if (isApiResponseShape<T>(payload)) {
       return payload;
@@ -54,7 +50,7 @@ async function request<T>(path: string, method: HttpMethod, body?: unknown): Pro
     if (response.ok) {
       return {
         success: true,
-        data: payload as T,
+        data: (payload ?? ({} as T)) as T,
       };
     }
 

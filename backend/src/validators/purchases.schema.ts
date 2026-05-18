@@ -9,13 +9,17 @@ const purchaseItemSchema = z.object({
 });
 
 export const purchaseBodySchema = z.object({
-  supplierId: z.string().uuid(),
+  supplierId: z.string().uuid().optional(),
+  supplierName: z.string().min(1).optional(),
   date: z.string().min(1).optional(),
   purchaseOrder: z.string().default(''),
   reception: z.enum(['Recibido', 'Pendiente', 'Con observacion']).default('Recibido'),
   doc: z.string().default(''),
   observation: z.string().default(''),
   items: z.array(purchaseItemSchema).min(1),
+}).refine((value) => Boolean(value.supplierId || value.supplierName), {
+  message: 'Debes indicar supplierId o supplierName.',
+  path: ['supplierId'],
 });
 
 export const updatePurchaseBodySchema = z.object({

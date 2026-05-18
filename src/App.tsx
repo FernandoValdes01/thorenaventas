@@ -885,7 +885,7 @@ function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
 }
 
 function App() {
-  const { session, loading, refreshSession } = useAuth();
+  const { session, loading, refreshSession, clearSession } = useAuth();
   const [stateHydrated, setStateHydrated] = useState(false);
   const [themeMode, setThemeMode] = useState(() => getInitialThemeMode());
   const [resolvedTheme, setResolvedTheme] = useState(() => getResolvedTheme(getInitialThemeMode()));
@@ -1126,12 +1126,39 @@ function App() {
     await authService.logout();
     removeItem(window.sessionStorage, STORAGE_KEYS.activeView);
     setActiveView('ventas');
-    await refreshSession();
+    clearSession();
   };
 
   const handleViewChange = (view) => {
     setActiveView(view);
   };
+
+  const inventoryProducts = useMemo(() => {
+    const byId = new Map();
+    products.forEach((item) => {
+      const id = String(item.id || item.sku || '').trim();
+      if (!id) return;
+      byId.set(id, { ...item });
+    });
+
+    erpProductsFull.forEach((item) => {
+      const id = String(item.sku || item.id || '').trim();
+      if (!id) return;
+      const current = byId.get(id);
+      byId.set(id, {
+        id,
+        sku: id,
+        name: item.product || current?.name || id,
+        category: item.category || current?.category || 'General',
+        stock: Math.max(0, Number(item.stock) || Number(current?.stock) || 0),
+        stockMin: Math.max(0, Number(item.stockMin) || Number(current?.stockMin) || 0),
+        basePrice: Math.max(0, Number(item.salePriceBase) || Number(current?.basePrice) || 0),
+        offer: current?.offer || { mode: 'none', discountPercent: 0, endDate: '' },
+      });
+    });
+
+    return [...byId.values()];
+  }, [products, erpProductsFull]);
 
   if (loading) {
     return <main className="auth-screen"><section className="auth-card panel"><p>Cargando sesion...</p></section></main>;
@@ -1158,7 +1185,7 @@ function App() {
       <main className="app-main">
         {activeView === 'ventas' ? (
           <SalesWorkspace
-            products={products}
+            products={inventoryProducts}
             setProducts={setProducts}
             orders={orders}
             setOrders={setOrders}
@@ -1173,6 +1200,8 @@ function App() {
           <ClientsView clients={clients} orders={orders} cobranzas={cobranzas} setCobranzas={setCobranzas} />
         ) : activeView === 'erp' ? (
           <ERPView
+            products={products}
+            setProducts={setProducts}
             clients={clients}
             setClients={setClients}
             orders={orders}
@@ -1192,7 +1221,7 @@ function App() {
             setCityRates={setErpCityRates}
           />
         ) : (
-          <ProductsView products={products} setProducts={setProducts} />
+          <ProductsView products={inventoryProducts} setProducts={setProducts} />
         )}
       </main>
     </div>

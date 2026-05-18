@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import { productsService } from '../services/products.service';
+import { purchasesService } from '../services/purchases.service';
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -63,6 +65,7 @@ const asNumber = (value, fallback = 0) => {
 };
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const formatCurrency = (value) => currencyFormatter.format(Math.round(Math.max(0, asNumber(value, 0))));
 const formatPercent = (value) => percentFormatter.format(clamp(asNumber(value, 0), 0, 1));
@@ -263,6 +266,8 @@ function MetricCard({ title, value }) {
 }
 
 function ERPView({
+  products,
+  setProducts,
   clients,
   setClients,
   orders,
@@ -590,7 +595,7 @@ function ERPView({
     setScales((current) => current.filter((item) => item.id !== id));
   };
 
-  const handleAddPurchase = (event) => {
+  const handleAddPurchase = async (event) => {
     event.preventDefault();
 
     const supplierId = String(purchaseForm.supplierId || '').trim();
@@ -645,18 +650,64 @@ function ERPView({
       observation: purchaseForm.observation.trim(),
     };
 
+    const purchaseResult = await purchasesService.create({
+      supplierId: purchaseForm.supplierId,
+      supplierName: supplier.name,
+      date: newPurchase.date,
+      purchaseOrder: newPurchase.purchaseOrder,
+      reception: newPurchase.reception,
+      doc: newPurchase.doc,
+      observation: newPurchase.observation,
+      items: [
+        {
+          productSku: product.sku,
+          quantity,
+          unitCost,
+          transportUnit,
+        },
+      ],
+    });
+
+    if (!purchaseResult.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar compra en base de datos: ${purchaseResult.error.message}` });
+      return;
+    }
+
     setProductsFull((current) =>
       current.map((item) => {
         if (item.sku !== productSku) return item;
         return { ...item, stock: Math.max(0, Math.round(asNumber(item.stock, 0))) + quantity };
       }),
     );
+    setProducts((current) => {
+      const exists = current.some((item) => String(item.id || '') === productSku);
+      if (!exists) {
+        return [
+          {
+            id: productSku,
+            sku: productSku,
+            name: product.product || productSku,
+            category: product.category || 'General',
+            stock: quantity,
+            stockMin: Math.max(0, Math.round(asNumber(product.stockMin, 0))),
+            basePrice: Math.max(0, Math.round(asNumber(product.salePriceBase, 0))),
+            offer: { mode: 'none', discountPercent: 0, endDate: '' },
+          },
+          ...current,
+        ];
+      }
+
+      return current.map((item) => {
+        if (String(item.id || '') !== productSku) return item;
+        return { ...item, stock: Math.max(0, Math.round(asNumber(item.stock, 0))) + quantity };
+      });
+    });
     setPurchases((current) => [newPurchase, ...current]);
     setPurchaseForm(emptyPurchaseForm);
     setFeedback({ type: 'success', text: 'Compra registrada.' });
   };
 
-  const handleAddProduct = (event) => {
+  const handleAddProduct = async (event) => {
     event.preventDefault();
 
     const productName = productForm.product.trim();
@@ -724,6 +775,53 @@ function ERPView({
     const unitProfit = Math.max(0, salePriceBase - finalCost);
     const marginPct = salePriceBase > 0 ? unitProfit / salePriceBase : 0;
 
+    const supplierIdForBackend = uuidRegex.test(supplierId) ? supplierId : undefined;
+    const fallbackSupplier = suppliers.find((item) => String(item.id) === supplierId);
+
+    const backendPayload = {
+      sku,
+      name: productName,
+      category: productForm.category.trim() || 'General',
+      unit: productForm.unit,
+      basePrice: salePriceBase,
+      supplierId: shouldCreateSupplier ? undefined : supplierIdForBackend,
+      newSupplier: shouldCreateSupplier
+        ? {
+            name: supplierName,
+            contact: productForm.newSupplierContact.trim(),
+            phone: productForm.newSupplierPhone.trim(),
+            email: productForm.newSupplierEmail.trim(),
+          }
+        : !supplierIdForBackend
+          ? {
+              name: supplierName,
+              contact: fallbackSupplier?.contact || '',
+              phone: fallbackSupplier?.phone || '',
+              email: fallbackSupplier?.email || '',
+            }
+          : undefined,
+      barcode: productForm.barcode.trim(),
+      brand: productForm.brand.trim(),
+      purchaseCost,
+      transportUnit,
+      location: productForm.location.trim(),
+      initialPurchase: {
+        quantity: initialPurchaseQuantity,
+        unitCost: Math.max(0, Math.round(asNumber(productForm.initialPurchaseUnitCost, 0))),
+        transportUnit: Math.max(0, Math.round(asNumber(productForm.initialPurchaseTransportUnit, 0))),
+        purchaseOrder: productForm.initialPurchaseOrder.trim(),
+        doc: productForm.initialPurchaseDoc.trim(),
+        reception: productForm.initialPurchaseReception,
+        observation: productForm.initialPurchaseObservation.trim(),
+      },
+    };
+
+    const backendResult = await productsService.createWithInitialPurchase(backendPayload);
+    if (!backendResult.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar en base de datos: ${backendResult.error.message}` });
+      return;
+    }
+
     const newProduct = {
       id: sku,
       sku,
@@ -768,6 +866,20 @@ function ERPView({
     };
 
     setProductsFull((current) => [newProduct, ...current]);
+    setProducts((current) => {
+      const existing = current.find((item) => String(item.id || '') === sku);
+      const nextItem = {
+        id: sku,
+        sku,
+        name: productName,
+        category: newProduct.category,
+        stock: newProduct.stock,
+        stockMin: newProduct.stockMin,
+        basePrice: newProduct.salePriceBase,
+        offer: existing?.offer || { mode: 'none', discountPercent: 0, endDate: '' },
+      };
+      return [nextItem, ...current.filter((item) => String(item.id || '') !== sku)];
+    });
     setPurchases((current) => [initialPurchase, ...current]);
     setProductForm(emptyProductForm);
     setFeedback({ type: 'success', text: 'Producto y compra inicial registrados en ERP.' });
@@ -792,6 +904,22 @@ function ERPView({
 
         if (key === 'status') {
           return { ...item, status: value };
+        }
+
+        return item;
+      }),
+    );
+
+    setProducts((current) =>
+      current.map((item) => {
+        if (String(item.id || '') !== sku) return item;
+
+        if (key === 'stock' || key === 'stockMin') {
+          return { ...item, [key]: Math.max(0, Math.round(asNumber(value, 0))) };
+        }
+
+        if (key === 'salePriceBase') {
+          return { ...item, basePrice: Math.max(0, Math.round(asNumber(value, 0))) };
         }
 
         return item;
@@ -855,6 +983,12 @@ function ERPView({
         setProductsFull((current) =>
           current.map((product) => {
             if (product.sku !== sku) return product;
+            return { ...product, stock: Math.max(0, Math.round(asNumber(product.stock, 0)) + delta) };
+          }),
+        );
+        setProducts((current) =>
+          current.map((product) => {
+            if (String(product.id || '') !== sku) return product;
             return { ...product, stock: Math.max(0, Math.round(asNumber(product.stock, 0)) + delta) };
           }),
         );
@@ -1097,7 +1231,7 @@ function ERPView({
             <div className="form-grid">
               <label className="field field-wide">
                 <span>Nombre cliente</span>
-                <input value={clientForm.name} onChange={updateClientField('name')} />
+                <input value={clientForm.name} onChange={updateClientField('name')} placeholder="Ej: Almacen Don Pedro" />
               </label>
               <label className="field">
                 <span>Tipo</span>
@@ -1121,23 +1255,23 @@ function ERPView({
               </label>
               <label className="field">
                 <span>RUT</span>
-                <input value={clientForm.rut} onChange={updateClientField('rut')} />
+                <input value={clientForm.rut} onChange={updateClientField('rut')} placeholder="Ej: 76.123.456-7" />
               </label>
               <label className="field">
                 <span>Contacto</span>
-                <input value={clientForm.contact} onChange={updateClientField('contact')} />
+                <input value={clientForm.contact} onChange={updateClientField('contact')} placeholder="Ej: Pedro Munoz" />
               </label>
               <label className="field">
                 <span>Telefono</span>
-                <input value={clientForm.phone} onChange={updateClientField('phone')} />
+                <input value={clientForm.phone} onChange={updateClientField('phone')} placeholder="Ej: +56912345678" />
               </label>
               <label className="field">
                 <span>WhatsApp</span>
-                <input value={clientForm.whatsapp} onChange={updateClientField('whatsapp')} />
+                <input value={clientForm.whatsapp} onChange={updateClientField('whatsapp')} placeholder="Ej: +56912345678" />
               </label>
               <label className="field field-wide">
                 <span>Email</span>
-                <input value={clientForm.email} onChange={updateClientField('email')} />
+                <input value={clientForm.email} onChange={updateClientField('email')} placeholder="Ej: compras@cliente.cl" />
               </label>
               <label className="field field-wide">
                 <span>Instagram</span>
@@ -1145,15 +1279,15 @@ function ERPView({
               </label>
               <label className="field field-wide">
                 <span>Direccion</span>
-                <input value={clientForm.address} onChange={updateClientField('address')} />
+                <input value={clientForm.address} onChange={updateClientField('address')} placeholder="Ej: Pedro de Valdivia 402" />
               </label>
               <label className="field">
                 <span>Zona</span>
-                <input value={clientForm.zone} onChange={updateClientField('zone')} />
+                <input value={clientForm.zone} onChange={updateClientField('zone')} placeholder="Ej: Villarrica" />
               </label>
               <label className="field">
                 <span>Sector</span>
-                <input value={clientForm.sector} onChange={updateClientField('sector')} />
+                <input value={clientForm.sector} onChange={updateClientField('sector')} placeholder="Ej: Segunda Faja" />
               </label>
               <label className="field">
                 <span>Frecuencia visita</span>
@@ -1174,7 +1308,7 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Meta mensual</span>
-                <input type="number" min="0" step="1" value={clientForm.monthlyTarget} onChange={updateClientField('monthlyTarget')} />
+                <input type="number" min="0" step="1" value={clientForm.monthlyTarget} onChange={updateClientField('monthlyTarget')} placeholder="Ej: 350000" />
               </label>
               <label className="field">
                 <span>Progreso meta (0-1)</span>
@@ -1182,11 +1316,11 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Limite credito</span>
-                <input type="number" min="0" step="1" value={clientForm.creditLimit} onChange={updateClientField('creditLimit')} />
+                <input type="number" min="0" step="1" value={clientForm.creditLimit} onChange={updateClientField('creditLimit')} placeholder="Ej: 120000" />
               </label>
               <label className="field field-wide">
                 <span>Notas</span>
-                <textarea rows="3" value={clientForm.notes} onChange={updateClientField('notes')} />
+                <textarea rows="3" value={clientForm.notes} onChange={updateClientField('notes')} placeholder="Ej: Prefiere entregas martes AM" />
               </label>
             </div>
 
@@ -1283,11 +1417,11 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Zona</span>
-                <input value={routeForm.zone} onChange={updateRouteField('zone')} />
+                <input value={routeForm.zone} onChange={updateRouteField('zone')} placeholder="Ej: Villarrica" />
               </label>
               <label className="field">
                 <span>Sector</span>
-                <input value={routeForm.sector} onChange={updateRouteField('sector')} />
+                <input value={routeForm.sector} onChange={updateRouteField('sector')} placeholder="Ej: Segunda Faja" />
               </label>
               <label className="field">
                 <span>Clientes visitados</span>
@@ -1311,7 +1445,7 @@ function ERPView({
               </label>
               <label className="field field-wide">
                 <span>Observacion</span>
-                <textarea rows="3" value={routeForm.observation} onChange={updateRouteField('observation')} />
+                <textarea rows="3" value={routeForm.observation} onChange={updateRouteField('observation')} placeholder="Ej: Ruta con trafico alto" />
               </label>
             </div>
 
@@ -1381,7 +1515,7 @@ function ERPView({
             <div className="form-grid">
               <label className="field field-wide">
                 <span>Nombre escala</span>
-                <input value={scaleForm.label} onChange={updateScaleField('label')} />
+                <input value={scaleForm.label} onChange={updateScaleField('label')} placeholder="Ej: Mayorista base" />
               </label>
               <label className="field">
                 <span>Cantidad minima</span>
@@ -1397,11 +1531,11 @@ function ERPView({
               </label>
               <label className="field field-wide">
                 <span>Objetivo comercial</span>
-                <input value={scaleForm.objective} onChange={updateScaleField('objective')} />
+                <input value={scaleForm.objective} onChange={updateScaleField('objective')} placeholder="Ej: Activar recompra" />
               </label>
               <label className="field field-wide">
                 <span>Comentario</span>
-                <textarea rows="3" value={scaleForm.comment} onChange={updateScaleField('comment')} />
+                <textarea rows="3" value={scaleForm.comment} onChange={updateScaleField('comment')} placeholder="Ej: Pedido mixto" />
               </label>
             </div>
 
@@ -1512,7 +1646,7 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Orden compra</span>
-                <input value={purchaseForm.purchaseOrder} onChange={updatePurchaseField('purchaseOrder')} />
+                <input value={purchaseForm.purchaseOrder} onChange={updatePurchaseField('purchaseOrder')} placeholder="Ej: OC-2026-001" />
               </label>
               <label className="field">
                 <span>SKU</span>
@@ -1540,11 +1674,11 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Costo unitario</span>
-                <input type="number" min="0" step="1" value={purchaseForm.unitCost} onChange={updatePurchaseField('unitCost')} required />
+                <input type="number" min="0" step="1" value={purchaseForm.unitCost} onChange={updatePurchaseField('unitCost')} placeholder="Ej: 1850" required />
               </label>
               <label className="field">
                 <span>Transporte unidad</span>
-                <input type="number" min="0" step="1" value={purchaseForm.transportUnit} onChange={updatePurchaseField('transportUnit')} />
+                <input type="number" min="0" step="1" value={purchaseForm.transportUnit} onChange={updatePurchaseField('transportUnit')} placeholder="Ej: 120" />
               </label>
               <label className="field">
                 <span>Recepcion</span>
@@ -1558,11 +1692,11 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Documento</span>
-                <input value={purchaseForm.doc} onChange={updatePurchaseField('doc')} />
+                <input value={purchaseForm.doc} onChange={updatePurchaseField('doc')} placeholder="Ej: G-1004" />
               </label>
               <label className="field field-wide">
                 <span>Observacion</span>
-                <textarea rows="3" value={purchaseForm.observation} onChange={updatePurchaseField('observation')} />
+                <textarea rows="3" value={purchaseForm.observation} onChange={updatePurchaseField('observation')} placeholder="Ej: Recepcion completa" />
               </label>
             </div>
 
@@ -1638,7 +1772,9 @@ function ERPView({
               <p className="muted">SKU, costos, margen, stock y estado operativo.</p>
             </div>
 
-            <div className="form-grid">
+            <div className="erp-form-section">
+              <div className="erp-form-section-title">1. Proveedor</div>
+              <div className="form-grid">
               <label className="field">
                 <span>Proveedor</span>
                 <select value={productForm.createSupplier} onChange={updateProductField('createSupplier')}>
@@ -1650,19 +1786,19 @@ function ERPView({
                 <>
                   <label className="field field-wide">
                     <span>Nombre proveedor nuevo</span>
-                    <input value={productForm.newSupplierName} onChange={updateProductField('newSupplierName')} required />
+                    <input value={productForm.newSupplierName} onChange={updateProductField('newSupplierName')} placeholder="Ej: Proveedor Bebidas" required />
                   </label>
                   <label className="field">
                     <span>Contacto proveedor</span>
-                    <input value={productForm.newSupplierContact} onChange={updateProductField('newSupplierContact')} />
+                    <input value={productForm.newSupplierContact} onChange={updateProductField('newSupplierContact')} placeholder="Ej: Camila Soto" />
                   </label>
                   <label className="field">
                     <span>Telefono proveedor</span>
-                    <input value={productForm.newSupplierPhone} onChange={updateProductField('newSupplierPhone')} />
+                    <input value={productForm.newSupplierPhone} onChange={updateProductField('newSupplierPhone')} placeholder="Ej: +56998765432" />
                   </label>
                   <label className="field field-wide">
                     <span>Email proveedor</span>
-                    <input value={productForm.newSupplierEmail} onChange={updateProductField('newSupplierEmail')} />
+                    <input value={productForm.newSupplierEmail} onChange={updateProductField('newSupplierEmail')} placeholder="Ej: contacto@proveedor.cl" />
                   </label>
                 </>
               ) : (
@@ -1678,29 +1814,35 @@ function ERPView({
                   </select>
                 </label>
               )}
+              </div>
+            </div>
+
+            <div className="erp-form-section">
+              <div className="erp-form-section-title">2. Datos del producto</div>
+              <div className="form-grid">
               <label className="field">
                 <span>SKU</span>
-                <input value={productForm.sku} onChange={updateProductField('sku')} required />
+                <input value={productForm.sku} onChange={updateProductField('sku')} placeholder="Ej: THO-BEB-001" required />
               </label>
               <label className="field">
                 <span>Codigo barra</span>
-                <input value={productForm.barcode} onChange={updateProductField('barcode')} />
+                <input value={productForm.barcode} onChange={updateProductField('barcode')} placeholder="Ej: 7801234567890" />
               </label>
               <label className="field">
                 <span>Categoria</span>
-                <input value={productForm.category} onChange={updateProductField('category')} />
+                <input value={productForm.category} onChange={updateProductField('category')} placeholder="Ej: Bebidas" />
               </label>
               <label className="field field-wide">
                 <span>Nombre producto</span>
-                <input value={productForm.product} onChange={updateProductField('product')} required />
+                <input value={productForm.product} onChange={updateProductField('product')} placeholder="Ej: Energetica Score 735 ml" required />
               </label>
               <label className="field">
                 <span>Marca</span>
-                <input value={productForm.brand} onChange={updateProductField('brand')} />
+                <input value={productForm.brand} onChange={updateProductField('brand')} placeholder="Ej: Score" />
               </label>
               <label className="field">
                 <span>Unidad</span>
-                <input value={productForm.unit} onChange={updateProductField('unit')} />
+                <input value={productForm.unit} onChange={updateProductField('unit')} placeholder="Ej: Unidad" />
               </label>
               <label className="field">
                 <span>Costo compra</span>
@@ -1714,6 +1856,30 @@ function ERPView({
                 <span>Precio venta base</span>
                 <input type="number" min="0" step="1" value={productForm.salePriceBase} onChange={updateProductField('salePriceBase')} />
               </label>
+              <label className="field">
+                <span>Stock minimo</span>
+                <input type="number" min="0" step="1" value={productForm.stockMin} onChange={updateProductField('stockMin')} />
+              </label>
+              <label className="field">
+                <span>Ubicacion</span>
+                <input value={productForm.location} onChange={updateProductField('location')} placeholder="Ej: Bodega B" />
+              </label>
+              <label className="field">
+                <span>Estado</span>
+                <select value={productForm.status} onChange={updateProductField('status')}>
+                  {PRODUCT_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              </div>
+            </div>
+
+            <div className="erp-form-section">
+              <div className="erp-form-section-title">3. Compra inicial</div>
+              <div className="form-grid">
               <label className="field">
                 <span>Cantidad compra inicial</span>
                 <input type="number" min="1" step="1" value={productForm.initialPurchaseQuantity} onChange={updateProductField('initialPurchaseQuantity')} required />
@@ -1744,28 +1910,11 @@ function ERPView({
                   ))}
                 </select>
               </label>
-              <label className="field">
-                <span>Stock minimo</span>
-                <input type="number" min="0" step="1" value={productForm.stockMin} onChange={updateProductField('stockMin')} />
-              </label>
-              <label className="field">
-                <span>Ubicacion</span>
-                <input value={productForm.location} onChange={updateProductField('location')} />
-              </label>
-              <label className="field">
-                <span>Estado</span>
-                <select value={productForm.status} onChange={updateProductField('status')}>
-                  {PRODUCT_STATUSES.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <label className="field field-wide">
                 <span>Observacion compra inicial</span>
-                <textarea rows="3" value={productForm.initialPurchaseObservation} onChange={updateProductField('initialPurchaseObservation')} />
+                <textarea rows="3" value={productForm.initialPurchaseObservation} onChange={updateProductField('initialPurchaseObservation')} placeholder="Ej: Recepcion parcial, revisar lote" />
               </label>
+            </div>
             </div>
 
             <button className="button button-primary" type="submit">
@@ -1867,15 +2016,15 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Cliente</span>
-                <input value={saleForm.client} onChange={updateSaleField('client')} />
+                <input value={saleForm.client} onChange={updateSaleField('client')} placeholder="Ej: Cafe Araucania" />
               </label>
               <label className="field">
                 <span>Zona</span>
-                <input value={saleForm.zone} onChange={updateSaleField('zone')} />
+                <input value={saleForm.zone} onChange={updateSaleField('zone')} placeholder="Ej: Pucon" />
               </label>
               <label className="field">
                 <span>Sector</span>
-                <input value={saleForm.sector} onChange={updateSaleField('sector')} />
+                <input value={saleForm.sector} onChange={updateSaleField('sector')} placeholder="Ej: Centro" />
               </label>
               <label className="field">
                 <span>Vendedor</span>
@@ -1893,7 +2042,7 @@ function ERPView({
               </label>
               <label className="field field-wide">
                 <span>Producto</span>
-                <input value={saleForm.product} onChange={updateSaleField('product')} />
+                <input value={saleForm.product} onChange={updateSaleField('product')} placeholder="Ej: Agua 1.5 L" />
               </label>
               <label className="field">
                 <span>Venta</span>

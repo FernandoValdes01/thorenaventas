@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { fail, ok } from '../lib/http';
+import { purchasesService } from '../services/purchases.service';
 import { purchaseBodySchema, updatePurchaseBodySchema } from '../validators/purchases.schema';
 
 export const purchasesRoutes = new Hono()
@@ -12,7 +13,12 @@ export const purchasesRoutes = new Hono()
       return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message || 'Compra invalida.', 400);
     }
 
-    return ok(c, { created: true, payload: parsed.data }, 201);
+    try {
+      const created = await purchasesService.create(parsed.data);
+      return ok(c, { created: true, payload: created }, 201);
+    } catch (error) {
+      return fail(c, 'PURCHASE_CREATE_FAILED', error instanceof Error ? error.message : 'No se pudo registrar compra.', 400);
+    }
   })
   .patch('/:id', async (c) => {
     const body = await c.req.json();

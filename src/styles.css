@@ -1211,6 +1211,21 @@ textarea:focus {
   padding: 18px;
 }
 
+.erp-form-section {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--surface-strong) 94%, var(--brand-soft) 6%);
+}
+
+.erp-form-section-title {
+  font-size: 0.84rem;
+  font-weight: 800;
+  color: var(--brand-strong);
+  margin-bottom: 10px;
+}
+
 .erp-dashboard-layout {
   display: grid;
   gap: 14px;
