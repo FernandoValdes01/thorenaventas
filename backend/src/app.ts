@@ -7,6 +7,7 @@ import { authMiddleware } from './middlewares/auth';
 import { corsMiddleware } from './middlewares/cors';
 import { errorHandler } from './middlewares/error-handler';
 import { requireRole } from './middlewares/require-role';
+import { AUTH_BASE_PATH } from './lib/auth';
 import { ok } from './lib/http';
 import { authRoutes } from './routes/auth.routes';
 import { cityRatesRoutes } from './routes/city-rates.routes';
@@ -51,7 +52,7 @@ const healthHandler = async (c: Context) => {
 
 app.get('/health', healthHandler);
 app.get('/api/v1/health', healthHandler);
-app.route('/api/v1/auth', authRoutes);
+app.route(AUTH_BASE_PATH, authRoutes);
 
 app.use('/api/v1/*', authMiddleware);
 app.use('/api/v1/*', requireRole(['admin']));
