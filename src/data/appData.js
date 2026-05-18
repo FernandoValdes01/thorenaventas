@@ -1,7 +1,7 @@
 import logoUrl from '../../storeinfo/logothorena.jpg';
 
 export const APP_NAME = 'Thorena Comercial';
-export const APP_SUBTITLE = 'MVP interno de ventas';
+export const APP_SUBTITLE = 'Sistema Thorena';
 export const APP_LOCATION = 'Villarrica, Región de La Araucanía';
 export const LOGIN_CREDENTIALS = {
   username: 'usuario1',

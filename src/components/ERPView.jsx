@@ -1,4 +1,22 @@
 import { useMemo, useState } from 'react';
+import { clientsService } from '../services/clients.service';
+import { routesService } from '../services/routes.service';
+import { volumeScalesService } from '../services/volume-scales.service';
+import { salesService } from '../services/sales.service';
+import { productsService } from '../services/products.service';
+import { purchasesService } from '../services/purchases.service';
+import { suppliersService } from '../services/suppliers.service';
+import { cityRatesService } from '../services/city-rates.service';
+import {
+  normalizeEmail,
+  normalizePhone,
+  normalizeRut,
+  normalizeText,
+  normalizeTextKey,
+  validateEmail,
+  validatePhone,
+  validateRutDetailed,
+} from '../lib/normalization';
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -63,6 +81,7 @@ const asNumber = (value, fallback = 0) => {
 };
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const formatCurrency = (value) => currencyFormatter.format(Math.round(Math.max(0, asNumber(value, 0))));
 const formatPercent = (value) => percentFormatter.format(clamp(asNumber(value, 0), 0, 1));
@@ -115,10 +134,9 @@ const emptyScaleForm = {
 
 const emptyPurchaseForm = {
   date: todayISO(),
-  supplier: '',
+  supplierId: '',
   purchaseOrder: '',
-  sku: '',
-  product: '',
+  productSku: '',
   quantity: '1',
   unitCost: '0',
   transportUnit: '0',
@@ -128,6 +146,12 @@ const emptyPurchaseForm = {
 };
 
 const emptyProductForm = {
+  supplierId: '',
+  createSupplier: 'false',
+  newSupplierName: '',
+  newSupplierContact: '',
+  newSupplierPhone: '',
+  newSupplierEmail: '',
   sku: '',
   barcode: '',
   category: '',
@@ -141,6 +165,13 @@ const emptyProductForm = {
   stockMin: '0',
   location: '',
   status: 'Activo',
+  initialPurchaseQuantity: '1',
+  initialPurchaseUnitCost: '0',
+  initialPurchaseTransportUnit: '0',
+  initialPurchaseOrder: '',
+  initialPurchaseDoc: '',
+  initialPurchaseReception: 'Recibido',
+  initialPurchaseObservation: '',
 };
 
 const emptySaleForm = {
@@ -155,15 +186,6 @@ const emptySaleForm = {
   cost: '0',
   paymentMethod: 'Efectivo',
   dispatchStatus: 'Pendiente',
-};
-
-const emptySupplierForm = {
-  name: '',
-  contact: '',
-  phone: '',
-  email: '',
-  status: 'Activo',
-  notes: '',
 };
 
 const emptyCityRateForm = {
@@ -260,6 +282,8 @@ function MetricCard({ title, value }) {
 }
 
 function ERPView({
+  products,
+  setProducts,
   clients,
   setClients,
   orders,
@@ -286,8 +310,9 @@ function ERPView({
   const [purchaseForm, setPurchaseForm] = useState(emptyPurchaseForm);
   const [productForm, setProductForm] = useState(emptyProductForm);
   const [saleForm, setSaleForm] = useState(emptySaleForm);
-  const [supplierForm, setSupplierForm] = useState(emptySupplierForm);
   const [cityRateForm, setCityRateForm] = useState(emptyCityRateForm);
+  const [editModal, setEditModal] = useState(null);
+  const [editError, setEditError] = useState('');
 
   const currentMonth = useMemo(() => new Date().toISOString().slice(0, 7), []);
 
@@ -362,6 +387,65 @@ function ERPView({
     };
   }, [clients, ordersMonth.length, productsFull, salesMonth]);
 
+  const suppliersById = useMemo(() => {
+    const map = new Map();
+    suppliers.forEach((supplier) => {
+      map.set(String(supplier.id), supplier);
+    });
+    return map;
+  }, [suppliers]);
+
+  const supplierIdByName = useMemo(() => {
+    const map = new Map();
+    suppliers.forEach((supplier) => {
+      const key = String(supplier.name || '').trim().toLowerCase();
+      if (key) map.set(key, String(supplier.id));
+    });
+    return map;
+  }, [suppliers]);
+
+  const purchaseSupplierBySku = useMemo(() => {
+    const map = new Map();
+    purchases.forEach((purchase) => {
+      const sku = String(purchase.productSku || purchase.sku || '').trim();
+      if (!sku) return;
+      const byId = String(purchase.supplierId || '').trim();
+      if (byId) {
+        map.set(sku, byId);
+        return;
+      }
+      const byName = supplierIdByName.get(String(purchase.supplier || '').trim().toLowerCase());
+      if (byName) map.set(sku, byName);
+    });
+    return map;
+  }, [purchases, supplierIdByName]);
+
+  const getEffectiveSupplierId = (product) => {
+    const direct = String(product?.supplierId || '').trim();
+    if (direct) return direct;
+    const fromPurchase = purchaseSupplierBySku.get(String(product?.sku || '').trim());
+    if (fromPurchase) return fromPurchase;
+    const fromName = supplierIdByName.get(String(product?.supplier || product?.brand || '').trim().toLowerCase());
+    return fromName || '';
+  };
+
+  const productsBySupplier = useMemo(() => {
+    const map = new Map();
+    productsFull.forEach((product) => {
+      const supplierId = getEffectiveSupplierId(product);
+      if (!supplierId) return;
+      if (!map.has(supplierId)) map.set(supplierId, []);
+      map.get(supplierId).push(product);
+    });
+    return map;
+  }, [productsFull, purchaseSupplierBySku, supplierIdByName]);
+
+  const purchaseProductsForSupplier = useMemo(() => {
+    const supplierId = String(purchaseForm.supplierId || '');
+    if (!supplierId) return [];
+    return productsBySupplier.get(supplierId) || [];
+  }, [productsBySupplier, purchaseForm.supplierId]);
+
   const updateClientField = (key) => (event) => {
     setClientForm((current) => ({ ...current, [key]: event.target.value }));
     setFeedback(null);
@@ -392,22 +476,52 @@ function ERPView({
     setFeedback(null);
   };
 
-  const updateSupplierField = (key) => (event) => {
-    setSupplierForm((current) => ({ ...current, [key]: event.target.value }));
-    setFeedback(null);
-  };
-
   const updateCityRateField = (key) => (event) => {
     setCityRateForm((current) => ({ ...current, [key]: event.target.value }));
     setFeedback(null);
   };
 
-  const handleAddClient = (event) => {
+  const handlePurchaseSupplierChange = (event) => {
+    const supplierId = event.target.value;
+    setPurchaseForm((current) => ({ ...current, supplierId, productSku: '' }));
+    setFeedback(null);
+  };
+
+  const handleAddClient = async (event) => {
     event.preventDefault();
 
-    const name = clientForm.name.trim();
+    const name = normalizeText(clientForm.name);
     if (!name) {
       setFeedback({ type: 'error', text: 'Debes ingresar el nombre del cliente.' });
+      return;
+    }
+
+    const rut = normalizeRut(clientForm.rut);
+    const phone = normalizePhone(clientForm.phone);
+    const whatsapp = normalizePhone(clientForm.whatsapp);
+    const email = normalizeEmail(clientForm.email);
+
+    const rutCheck = validateRutDetailed(rut);
+    if (!rutCheck.valid) {
+      setFeedback({ type: 'error', text: rutCheck.reason === 'format' ? 'Formato de RUT invalido. Usa 12345678-5.' : 'RUT invalido: digito verificador incorrecto.' });
+      return;
+    }
+    if (!validatePhone(phone)) {
+      setFeedback({ type: 'error', text: 'Telefono invalido. Usa formato +56912345678.' });
+      return;
+    }
+    if (!validatePhone(whatsapp)) {
+      setFeedback({ type: 'error', text: 'WhatsApp invalido. Usa formato +56912345678.' });
+      return;
+    }
+    if (!validateEmail(email)) {
+      setFeedback({ type: 'error', text: 'Correo invalido. Ejemplo: nombre@dominio.cl' });
+      return;
+    }
+
+    const duplicatedRut = rut && clients.some((item) => normalizeTextKey(item.rut) === normalizeTextKey(rut));
+    if (duplicatedRut) {
+      setFeedback({ type: 'error', text: 'Ya existe un cliente con ese RUT.' });
       return;
     }
 
@@ -415,36 +529,43 @@ function ERPView({
     const clientId = `CLI-${String(nowId).slice(-6)}`;
     const newClient = {
       id: clientId,
+      code: clientId,
       name,
-      type: clientForm.type,
-      rut: clientForm.rut.trim(),
-      phone: clientForm.phone.trim(),
-      contact: clientForm.contact.trim(),
-      email: clientForm.email.trim(),
-      address: clientForm.address.trim(),
-      sector: clientForm.sector.trim(),
-      zone: clientForm.zone.trim(),
+      type: normalizeText(clientForm.type),
+      rut,
+      phone,
+      contact: normalizeText(clientForm.contact),
+      email,
+      address: normalizeText(clientForm.address),
+      sector: normalizeText(clientForm.sector),
+      zone: normalizeText(clientForm.zone),
       frequency: clientForm.frequency,
       creditEnabled: clientForm.creditEnabled === 'true',
-      debt: Math.max(0, Math.round(asNumber(clientForm.debt, 0))),
+      debt: 0,
       monthlyTarget: Math.max(0, Math.round(asNumber(clientForm.monthlyTarget, 0))),
-      accumulatedSales: Math.max(0, Math.round(asNumber(clientForm.accumulatedSales, 0))),
+      accumulatedSales: 0,
       goalProgress: clamp(asNumber(clientForm.goalProgress, 0), 0, 1),
       creditLimit: Math.max(0, Math.round(asNumber(clientForm.creditLimit, 0))),
       status: clientForm.status,
-      notes: clientForm.notes.trim(),
-      observations: clientForm.notes.trim(),
-      whatsapp: clientForm.whatsapp.trim(),
-      instagram: clientForm.instagram.trim(),
+      notes: normalizeText(clientForm.notes),
+      observations: normalizeText(clientForm.notes),
+      whatsapp,
+      instagram: normalizeText(clientForm.instagram),
       lastPurchase: '',
     };
 
-    setClients((current) => [newClient, ...current]);
+    const result = await clientsService.create(newClient);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar cliente en base de datos: ${result.error.message}` });
+      return;
+    }
+
+    setClients((current) => [result.data || newClient, ...current]);
     setClientForm(emptyClientForm);
     setFeedback({ type: 'success', text: 'Cliente agregado al ERP.' });
   };
 
-  const handleAddRoute = (event) => {
+  const handleAddRoute = async (event) => {
     event.preventDefault();
 
     if (!routeForm.zone.trim() || !routeForm.sector.trim()) {
@@ -471,12 +592,18 @@ function ERPView({
       observation: routeForm.observation.trim(),
     };
 
-    setRoutes((current) => [newRoute, ...current]);
+    const result = await routesService.create(newRoute);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar ruta en base de datos: ${result.error.message}` });
+      return;
+    }
+
+    setRoutes((current) => [result.data || newRoute, ...current]);
     setRouteForm(emptyRouteForm);
     setFeedback({ type: 'success', text: 'Ruta agregada correctamente.' });
   };
 
-  const handleAddScale = (event) => {
+  const handleAddScale = async (event) => {
     event.preventDefault();
 
     const label = scaleForm.label.trim();
@@ -499,12 +626,25 @@ function ERPView({
       comment: scaleForm.comment.trim(),
     };
 
-    setScales((current) => [...current, newScale].sort((a, b) => a.minQuantity - b.minQuantity));
+    const result = await volumeScalesService.create(newScale);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar escala en base de datos: ${result.error.message}` });
+      return;
+    }
+
+    setScales((current) => [...current, result.data || newScale].sort((a, b) => a.minQuantity - b.minQuantity));
     setScaleForm(emptyScaleForm);
     setFeedback({ type: 'success', text: 'Escala agregada correctamente.' });
   };
 
   const handleScaleInlineChange = (id, key, value) => {
+    const backendValue = key === 'minQuantity' || key === 'maxQuantity'
+      ? Math.max(1, Math.round(asNumber(value, 1)))
+      : key === 'discountRate'
+        ? clamp(asNumber(value, 0), 0, 0.95)
+        : value;
+    volumeScalesService.update(id, { [key]: backendValue });
+
     setScales((current) =>
       current
         .map((item) => {
@@ -525,14 +665,39 @@ function ERPView({
   };
 
   const handleDeleteScale = (id) => {
+    volumeScalesService.remove(id);
     setScales((current) => current.filter((item) => item.id !== id));
   };
 
-  const handleAddPurchase = (event) => {
+  const handleAddPurchase = async (event) => {
     event.preventDefault();
 
-    if (!purchaseForm.supplier.trim() || !purchaseForm.product.trim()) {
-      setFeedback({ type: 'error', text: 'Debes completar proveedor y producto.' });
+    const supplierId = String(purchaseForm.supplierId || '').trim();
+    if (!supplierId) {
+      setFeedback({ type: 'error', text: 'Debes seleccionar un proveedor.' });
+      return;
+    }
+
+    const productSku = String(purchaseForm.productSku || '').trim();
+    if (!productSku) {
+      setFeedback({ type: 'error', text: 'Debes seleccionar un producto.' });
+      return;
+    }
+
+    const supplier = suppliersById.get(supplierId);
+    if (!supplier) {
+      setFeedback({ type: 'error', text: 'El proveedor seleccionado no existe.' });
+      return;
+    }
+
+    const product = productsFull.find((item) => String(item.sku || '') === productSku);
+    if (!product) {
+      setFeedback({ type: 'error', text: 'El producto seleccionado no existe.' });
+      return;
+    }
+
+    if (getEffectiveSupplierId(product) !== supplierId) {
+      setFeedback({ type: 'error', text: 'El producto no pertenece al proveedor seleccionado.' });
       return;
     }
 
@@ -544,10 +709,12 @@ function ERPView({
     const newPurchase = {
       id: `comp-${Date.now()}`,
       date: purchaseForm.date || todayISO(),
-      supplier: purchaseForm.supplier.trim(),
+      supplierId,
+      supplier: supplier.name,
       purchaseOrder: purchaseForm.purchaseOrder.trim(),
-      sku: purchaseForm.sku.trim(),
-      product: purchaseForm.product.trim(),
+      productSku,
+      sku: product.sku,
+      product: product.product,
       quantity,
       unitCost,
       transportUnit,
@@ -557,18 +724,120 @@ function ERPView({
       observation: purchaseForm.observation.trim(),
     };
 
+    const purchaseResult = await purchasesService.create({
+      supplierId: purchaseForm.supplierId,
+      supplierName: supplier.name,
+      date: newPurchase.date,
+      purchaseOrder: newPurchase.purchaseOrder,
+      reception: newPurchase.reception,
+      doc: newPurchase.doc,
+      observation: newPurchase.observation,
+      items: [
+        {
+          productSku: product.sku,
+          quantity,
+          unitCost,
+          transportUnit,
+        },
+      ],
+    });
+
+    if (!purchaseResult.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar compra en base de datos: ${purchaseResult.error.message}` });
+      return;
+    }
+
+    setProductsFull((current) =>
+      current.map((item) => {
+        if (item.sku !== productSku) return item;
+        return { ...item, stock: Math.max(0, Math.round(asNumber(item.stock, 0))) + quantity };
+      }),
+    );
+    setProducts((current) => {
+      const exists = current.some((item) => String(item.id || '') === productSku);
+      if (!exists) {
+        return [
+          {
+            id: productSku,
+            sku: productSku,
+            name: product.product || productSku,
+            category: product.category || 'General',
+            stock: quantity,
+            stockMin: Math.max(0, Math.round(asNumber(product.stockMin, 0))),
+            basePrice: Math.max(0, Math.round(asNumber(product.salePriceBase, 0))),
+            offer: { mode: 'none', discountPercent: 0, endDate: '' },
+          },
+          ...current,
+        ];
+      }
+
+      return current.map((item) => {
+        if (String(item.id || '') !== productSku) return item;
+        return { ...item, stock: Math.max(0, Math.round(asNumber(item.stock, 0))) + quantity };
+      });
+    });
     setPurchases((current) => [newPurchase, ...current]);
     setPurchaseForm(emptyPurchaseForm);
     setFeedback({ type: 'success', text: 'Compra registrada.' });
   };
 
-  const handleAddProduct = (event) => {
+  const handleAddProduct = async (event) => {
     event.preventDefault();
 
-    const productName = productForm.product.trim();
-    const sku = productForm.sku.trim();
+    const productName = normalizeText(productForm.product);
+    const sku = normalizeText(productForm.sku);
     if (!productName || !sku) {
       setFeedback({ type: 'error', text: 'Debes completar SKU y nombre de producto.' });
+      return;
+    }
+
+    const skuAlreadyExists = productsFull.some((item) => String(item.sku || '').trim().toLowerCase() === sku.toLowerCase());
+    if (skuAlreadyExists) {
+      setFeedback({ type: 'error', text: 'El SKU ya existe. Usa un SKU unico.' });
+      return;
+    }
+
+    const shouldCreateSupplier = productForm.createSupplier === 'true';
+    const selectedSupplierId = String(productForm.supplierId || '').trim();
+    let supplierId = selectedSupplierId;
+    let supplierName = suppliersById.get(selectedSupplierId)?.name || '';
+
+    if (shouldCreateSupplier) {
+      const newSupplierName = normalizeText(productForm.newSupplierName);
+      if (!newSupplierName) {
+        setFeedback({ type: 'error', text: 'Debes ingresar el nombre del nuevo proveedor.' });
+        return;
+      }
+
+      const duplicatedSupplier = suppliers.find((item) => normalizeTextKey(item.name) === normalizeTextKey(newSupplierName));
+      if (duplicatedSupplier) {
+        supplierId = String(duplicatedSupplier.id);
+        supplierName = duplicatedSupplier.name;
+      } else {
+        supplierId = `prov-${Date.now()}`;
+        supplierName = newSupplierName;
+      }
+    }
+
+    if (!supplierId) {
+      setFeedback({ type: 'error', text: 'Debes seleccionar un proveedor o crear uno nuevo.' });
+      return;
+    }
+
+    const newSupplierPhone = normalizePhone(productForm.newSupplierPhone);
+    const newSupplierEmail = normalizeEmail(productForm.newSupplierEmail);
+    if (!validatePhone(newSupplierPhone)) {
+      setFeedback({ type: 'error', text: 'Telefono de proveedor invalido. Usa formato +56912345678.' });
+      return;
+    }
+    if (!validateEmail(newSupplierEmail)) {
+      setFeedback({ type: 'error', text: 'Correo de proveedor invalido. Ejemplo: contacto@proveedor.cl' });
+      return;
+    }
+
+    const initialPurchaseQuantity = Math.max(0, Math.round(asNumber(productForm.initialPurchaseQuantity, 0)));
+    if (initialPurchaseQuantity < 1) {
+      setFeedback({ type: 'error', text: 'Debes ingresar una cantidad inicial valida mayor a 0.' });
       return;
     }
 
@@ -579,33 +848,144 @@ function ERPView({
     const unitProfit = Math.max(0, salePriceBase - finalCost);
     const marginPct = salePriceBase > 0 ? unitProfit / salePriceBase : 0;
 
+    if (salePriceBase < finalCost) {
+      setFeedback({ type: 'error', text: 'El precio minimo/base de venta no puede ser menor al costo real unitario.' });
+      return;
+    }
+
+    const supplierIdForBackend = uuidRegex.test(supplierId) ? supplierId : undefined;
+    const fallbackSupplier = suppliers.find((item) => String(item.id) === supplierId);
+
+    const backendPayload = {
+      sku,
+      name: productName,
+      category: normalizeTextKey(productForm.category) || 'general',
+      unit: normalizeText(productForm.unit) || 'Unidad',
+      basePrice: salePriceBase,
+      stockMin: Math.max(0, Math.round(asNumber(productForm.stockMin, 0))),
+      status: productForm.status,
+      supplierId: shouldCreateSupplier ? undefined : supplierIdForBackend,
+      newSupplier: shouldCreateSupplier
+        ? {
+            name: normalizeText(supplierName),
+            contact: normalizeText(productForm.newSupplierContact),
+            phone: newSupplierPhone,
+            email: newSupplierEmail,
+          }
+        : !supplierIdForBackend
+          ? {
+              name: normalizeText(supplierName),
+              contact: normalizeText(fallbackSupplier?.contact || ''),
+              phone: normalizePhone(fallbackSupplier?.phone || ''),
+              email: normalizeEmail(fallbackSupplier?.email || ''),
+            }
+          : undefined,
+      barcode: normalizeText(productForm.barcode),
+      brand: normalizeText(productForm.brand),
+      purchaseCost,
+      transportUnit,
+      location: normalizeText(productForm.location),
+      initialPurchase: {
+        quantity: initialPurchaseQuantity,
+        unitCost: purchaseCost,
+        transportUnit,
+        purchaseOrder: normalizeText(productForm.initialPurchaseOrder),
+        doc: normalizeText(productForm.initialPurchaseDoc),
+        reception: productForm.initialPurchaseReception,
+        observation: normalizeText(productForm.initialPurchaseObservation),
+      },
+    };
+
+    const backendResult = await productsService.createWithInitialPurchase(backendPayload);
+    if (!backendResult.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar en base de datos: ${backendResult.error.message}` });
+      return;
+    }
+
+    const persistedSupplierId = backendResult.data?.payload?.supplierId || supplierId;
+
+    if (shouldCreateSupplier && !suppliers.some((item) => String(item.id) === String(persistedSupplierId))) {
+      const newSupplier = {
+        id: persistedSupplierId,
+        name: supplierName,
+        contact: normalizeText(productForm.newSupplierContact),
+        phone: newSupplierPhone,
+        email: newSupplierEmail,
+        status: 'Activo',
+        notes: '',
+      };
+      setSuppliers((current) => [newSupplier, ...current]);
+    }
+
     const newProduct = {
       id: sku,
       sku,
-      barcode: productForm.barcode.trim(),
-      category: productForm.category.trim() || 'General',
+      barcode: normalizeText(productForm.barcode),
+      category: normalizeTextKey(productForm.category) || 'general',
       product: productName,
-      brand: productForm.brand.trim(),
-      unit: productForm.unit,
+      brand: normalizeText(productForm.brand),
+      supplierId: persistedSupplierId,
+      supplier: supplierName,
+      unit: normalizeText(productForm.unit) || 'Unidad',
       purchaseCost,
       transportUnit,
       finalCost,
       iva: 0.19,
       salePriceBase,
-      stock: Math.max(0, Math.round(asNumber(productForm.stock, 0))),
+      stock: initialPurchaseQuantity,
       stockMin: Math.max(0, Math.round(asNumber(productForm.stockMin, 0))),
       marginPct,
       unitProfit,
-      location: productForm.location.trim(),
+      location: normalizeText(productForm.location),
       status: productForm.status,
     };
 
-    setProductsFull((current) => [newProduct, ...current.filter((item) => item.sku !== sku)]);
+    const initialPurchaseUnitCost = purchaseCost;
+    const initialPurchaseTransportUnit = transportUnit;
+    const initialPurchase = {
+      id: `comp-${Date.now()}`,
+      date: todayISO(),
+      supplierId: persistedSupplierId,
+      supplier: supplierName,
+      purchaseOrder: normalizeText(productForm.initialPurchaseOrder),
+      productSku: sku,
+      sku,
+      product: productName,
+      quantity: initialPurchaseQuantity,
+      unitCost: initialPurchaseUnitCost,
+      transportUnit: initialPurchaseTransportUnit,
+      totalCost: initialPurchaseQuantity * (initialPurchaseUnitCost + initialPurchaseTransportUnit),
+      reception: productForm.initialPurchaseReception,
+      doc: normalizeText(productForm.initialPurchaseDoc),
+      observation: normalizeText(productForm.initialPurchaseObservation),
+    };
+
+    setProductsFull((current) => [newProduct, ...current]);
+    setProducts((current) => {
+      const existing = current.find((item) => String(item.id || '') === sku);
+      const nextItem = {
+        id: sku,
+        sku,
+        name: productName,
+        category: newProduct.category,
+        stock: newProduct.stock,
+        stockMin: newProduct.stockMin,
+        basePrice: newProduct.salePriceBase,
+        offer: existing?.offer || { mode: 'none', discountPercent: 0, endDate: '' },
+      };
+      return [nextItem, ...current.filter((item) => String(item.id || '') !== sku)];
+    });
+    setPurchases((current) => [initialPurchase, ...current]);
     setProductForm(emptyProductForm);
-    setFeedback({ type: 'success', text: 'Producto registrado en ERP.' });
+    setFeedback({ type: 'success', text: 'Producto y compra inicial registrados en ERP.' });
   };
 
   const handleProductInlineChange = (sku, key, value) => {
+    const backendValue = key === 'stock' || key === 'stockMin' || key === 'salePriceBase'
+      ? Math.max(0, Math.round(asNumber(value, 0)))
+      : value;
+    productsService.update(sku, { [key]: backendValue });
+
     setProductsFull((current) =>
       current.map((item) => {
         if (item.sku !== sku) return item;
@@ -629,9 +1009,217 @@ function ERPView({
         return item;
       }),
     );
+
+    setProducts((current) =>
+      current.map((item) => {
+        if (String(item.id || '') !== sku) return item;
+
+        if (key === 'stock' || key === 'stockMin') {
+          return { ...item, [key]: Math.max(0, Math.round(asNumber(value, 0))) };
+        }
+
+        if (key === 'salePriceBase') {
+          return { ...item, basePrice: Math.max(0, Math.round(asNumber(value, 0))) };
+        }
+
+        return item;
+      }),
+    );
   };
 
-  const handleAddSale = (event) => {
+  const handleClientInlineChange = (id, key, value) => {
+    if (key === 'rut') {
+      const rut = normalizeRut(value);
+      const rutCheck = validateRutDetailed(rut);
+      if (!rutCheck.valid) {
+        setFeedback({ type: 'error', text: rutCheck.reason === 'format' ? 'Formato de RUT invalido. Usa 12345678-5.' : 'RUT invalido: digito verificador incorrecto.' });
+        return;
+      }
+      const duplicatedRut = rut && clients.some((item) => item.id !== id && normalizeTextKey(item.rut) === normalizeTextKey(rut));
+      if (duplicatedRut) {
+        setFeedback({ type: 'error', text: 'Ya existe un cliente con ese RUT.' });
+        return;
+      }
+      value = rut;
+    }
+
+    if (key === 'phone' || key === 'whatsapp') {
+      const phone = normalizePhone(value);
+      if (!validatePhone(phone)) {
+        setFeedback({ type: 'error', text: 'Telefono invalido. Usa formato +56912345678.' });
+        return;
+      }
+      value = phone;
+    }
+
+    if (key === 'email') {
+      const email = normalizeEmail(value);
+      if (!validateEmail(email)) {
+        setFeedback({ type: 'error', text: 'Correo invalido. Ejemplo: nombre@dominio.cl' });
+        return;
+      }
+      value = email;
+    }
+
+    const backendValue = ['debt', 'monthlyTarget', 'accumulatedSales', 'creditLimit'].includes(key)
+      ? Math.max(0, Math.round(asNumber(value, 0)))
+      : key === 'goalProgress'
+        ? clamp(asNumber(value, 0), 0, 1)
+        : key === 'creditEnabled'
+          ? value === 'true'
+          : value;
+    clientsService.update(id, { [key]: backendValue });
+
+    setClients((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+
+        if (['debt', 'monthlyTarget', 'accumulatedSales', 'creditLimit'].includes(key)) {
+          return { ...item, [key]: Math.max(0, Math.round(asNumber(value, 0))) };
+        }
+
+        if (key === 'goalProgress') {
+          return { ...item, goalProgress: clamp(asNumber(value, 0), 0, 1) };
+        }
+
+        if (key === 'creditEnabled') {
+          return { ...item, creditEnabled: value === 'true' };
+        }
+
+        return { ...item, [key]: value };
+      }),
+    );
+  };
+
+  const handleRouteInlineChange = (id, key, value) => {
+    const numericFields = ['visitedClients', 'clientsWithOrder', 'sales', 'kmRoute', 'fuel'];
+    routesService.update(id, { [key]: numericFields.includes(key) ? Math.max(0, Math.round(asNumber(value, 0))) : value });
+
+    setRoutes((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+
+        const next = numericFields.includes(key)
+          ? { ...item, [key]: Math.max(0, Math.round(asNumber(value, 0))) }
+          : { ...item, [key]: value };
+
+        const visitedClients = Math.max(0, Math.round(asNumber(next.visitedClients, 0)));
+        const clientsWithOrder = Math.max(0, Math.round(asNumber(next.clientsWithOrder, 0)));
+        return {
+          ...next,
+          effectivenessPct: visitedClients > 0 ? clamp(clientsWithOrder / visitedClients, 0, 1) : 0,
+        };
+      }),
+    );
+  };
+
+  const handlePurchaseInlineChange = (id, key, value) => {
+    const currentPurchase = purchases.find((item) => item.id === id);
+    if (!currentPurchase) return;
+
+    const backendValue = key === 'quantity' || key === 'unitCost' || key === 'transportUnit'
+      ? Math.max(key === 'quantity' ? 1 : 0, Math.round(asNumber(value, key === 'quantity' ? 1 : 0)))
+      : value;
+    purchasesService.update(id, { [key]: backendValue });
+
+    if (key === 'quantity') {
+      const previousQuantity = Math.max(0, Math.round(asNumber(currentPurchase.quantity, 0)));
+      const nextQuantity = Math.max(1, Math.round(asNumber(value, 1)));
+      const delta = nextQuantity - previousQuantity;
+      const sku = String(currentPurchase.productSku || currentPurchase.sku || '');
+
+      if (delta !== 0 && sku) {
+        setProductsFull((current) =>
+          current.map((product) => {
+            if (product.sku !== sku) return product;
+            return { ...product, stock: Math.max(0, Math.round(asNumber(product.stock, 0)) + delta) };
+          }),
+        );
+        setProducts((current) =>
+          current.map((product) => {
+            if (String(product.id || '') !== sku) return product;
+            return { ...product, stock: Math.max(0, Math.round(asNumber(product.stock, 0)) + delta) };
+          }),
+        );
+      }
+    }
+
+    setPurchases((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+
+        if (key === 'supplierId') {
+          const supplierId = String(value || '');
+          const supplier = suppliersById.get(supplierId);
+          return {
+            ...item,
+            supplierId,
+            supplier: supplier?.name || item.supplier,
+          };
+        }
+
+        if (key === 'quantity' || key === 'unitCost' || key === 'transportUnit') {
+          const quantity = key === 'quantity' ? Math.max(1, Math.round(asNumber(value, 1))) : Math.max(1, Math.round(asNumber(item.quantity, 1)));
+          const unitCost = key === 'unitCost' ? Math.max(0, Math.round(asNumber(value, 0))) : Math.max(0, Math.round(asNumber(item.unitCost, 0)));
+          const transportUnit = key === 'transportUnit' ? Math.max(0, Math.round(asNumber(value, 0))) : Math.max(0, Math.round(asNumber(item.transportUnit, 0)));
+          return {
+            ...item,
+            quantity,
+            unitCost,
+            transportUnit,
+            totalCost: quantity * (unitCost + transportUnit),
+          };
+        }
+
+        return { ...item, [key]: value };
+      }),
+    );
+  };
+
+  const handleSaleInlineChange = (id, key, value) => {
+    const backendValue = key === 'sale' || key === 'cost' ? Math.max(0, Math.round(asNumber(value, 0))) : value;
+    salesService.update(id, { [key]: backendValue });
+
+    setSales((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+
+        if (key === 'sale' || key === 'cost') {
+          const sale = key === 'sale' ? Math.max(0, Math.round(asNumber(value, 0))) : Math.max(0, Math.round(asNumber(item.sale, 0)));
+          const cost = key === 'cost' ? Math.max(0, Math.round(asNumber(value, 0))) : Math.max(0, Math.round(asNumber(item.cost, 0)));
+          const profit = Math.max(0, sale - cost);
+          return { ...item, sale, cost, profit, marginPct: sale > 0 ? profit / sale : 0 };
+        }
+
+        return { ...item, [key]: value };
+      }),
+    );
+  };
+
+  const handleSupplierInlineChange = (id, key, value) => {
+    if (key === 'phone') {
+      const phone = normalizePhone(value);
+      if (!validatePhone(phone)) {
+        setFeedback({ type: 'error', text: 'Telefono invalido. Usa formato +56912345678.' });
+        return;
+      }
+      value = phone;
+    }
+
+    if (key === 'email') {
+      const email = normalizeEmail(value);
+      if (!validateEmail(email)) {
+        setFeedback({ type: 'error', text: 'Correo invalido. Ejemplo: contacto@proveedor.cl' });
+        return;
+      }
+      value = email;
+    }
+
+    suppliersService.update(id, { [key]: value });
+    setSuppliers((current) => current.map((item) => (item.id === id ? { ...item, [key]: value } : item)));
+  };
+
+  const handleAddSale = async (event) => {
     event.preventDefault();
 
     if (!saleForm.client.trim() || !saleForm.product.trim()) {
@@ -661,36 +1249,18 @@ function ERPView({
       dispatchStatus: saleForm.dispatchStatus,
     };
 
-    setSales((current) => [newSale, ...current]);
+    const result = await salesService.create(newSale);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar venta en base de datos: ${result.error.message}` });
+      return;
+    }
+
+    setSales((current) => [result.data || newSale, ...current]);
     setSaleForm(emptySaleForm);
     setFeedback({ type: 'success', text: 'Venta registrada en ERP.' });
   };
 
-  const handleAddSupplier = (event) => {
-    event.preventDefault();
-
-    const name = supplierForm.name.trim();
-    if (!name) {
-      setFeedback({ type: 'error', text: 'Debes ingresar el nombre del proveedor.' });
-      return;
-    }
-
-    const newSupplier = {
-      id: `prov-${Date.now()}`,
-      name,
-      contact: supplierForm.contact.trim(),
-      phone: supplierForm.phone.trim(),
-      email: supplierForm.email.trim(),
-      status: supplierForm.status,
-      notes: supplierForm.notes.trim(),
-    };
-
-    setSuppliers((current) => [newSupplier, ...current]);
-    setSupplierForm(emptySupplierForm);
-    setFeedback({ type: 'success', text: 'Proveedor agregado.' });
-  };
-
-  const handleAddCityRate = (event) => {
+  const handleAddCityRate = async (event) => {
     event.preventDefault();
 
     const city = cityRateForm.city.trim();
@@ -699,17 +1269,25 @@ function ERPView({
       return;
     }
 
-    const rate = clamp(asNumber(cityRateForm.rate, 0), 0, 0.95);
+    const ratePercent = clamp(asNumber(cityRateForm.rate, 0), 0, 95);
+    const rate = ratePercent / 100;
     const normalizedKey = city.toLowerCase();
 
+    const result = await cityRatesService.create({ city, rate });
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar tarifa en base de datos: ${result.error.message}` });
+      return;
+    }
+
+    const savedRate = result.data || { id: `city-${Date.now()}`, city, rate };
     setCityRates((current) => {
       const existing = current.find((item) => String(item.city || '').trim().toLowerCase() === normalizedKey);
 
       if (existing) {
-        return current.map((item) => (item.id === existing.id ? { ...item, city, rate } : item));
+        return current.map((item) => (item.id === existing.id ? savedRate : item));
       }
 
-      return [...current, { id: `city-${Date.now()}`, city, rate }];
+      return [...current, savedRate];
     });
 
     setCityRateForm(emptyCityRateForm);
@@ -717,11 +1295,13 @@ function ERPView({
   };
 
   const handleCityRateInlineChange = (id, key, value) => {
+    cityRatesService.update(id, { [key]: key === 'rate' ? clamp(asNumber(value, 0), 0, 95) / 100 : value });
+
     setCityRates((current) =>
       current.map((item) => {
         if (item.id !== id) return item;
         if (key === 'rate') {
-          return { ...item, rate: clamp(asNumber(value, 0), 0, 0.95) };
+          return { ...item, rate: clamp(asNumber(value, 0), 0, 95) / 100 };
         }
         return { ...item, city: value };
       }),
@@ -729,12 +1309,94 @@ function ERPView({
   };
 
   const handleDeleteCityRate = (id) => {
+    cityRatesService.remove(id);
     setCityRates((current) => current.filter((item) => item.id !== id));
+  };
+
+  const openEditModal = (entity, id, draft) => {
+    setEditError('');
+    setEditModal({ entity, id, draft });
+  };
+  const closeEditModal = () => {
+    setEditError('');
+    setEditModal(null);
+  };
+  const updateEditDraft = (key) => (event) => {
+    const value = event.target.value;
+    setEditError('');
+    setEditModal((current) => (current ? { ...current, draft: { ...current.draft, [key]: value } } : current));
+  };
+
+  const handleSaveEdit = () => {
+    if (!editModal) return;
+    const { entity, id } = editModal;
+    const draft = { ...(editModal.draft || {}) };
+
+    if (entity === 'client') {
+      draft.rut = normalizeRut(draft.rut || '');
+      draft.phone = normalizePhone(draft.phone || '');
+      draft.email = normalizeEmail(draft.email || '');
+      const rutCheck = validateRutDetailed(draft.rut);
+      if (!rutCheck.valid) {
+        setEditError(rutCheck.reason === 'format' ? 'Formato de RUT invalido. Usa 12345678-5.' : 'RUT invalido: digito verificador incorrecto.');
+        return;
+      }
+      if (!validatePhone(draft.phone)) {
+        setEditError('Telefono invalido. Usa formato +56912345678.');
+        return;
+      }
+      if (!validateEmail(draft.email)) {
+        setEditError('Correo invalido. Ejemplo: nombre@dominio.cl');
+        return;
+      }
+      const duplicatedRut = draft.rut && clients.some((item) => item.id !== id && normalizeTextKey(item.rut) === normalizeTextKey(draft.rut));
+      if (duplicatedRut) {
+        setEditError('Ya existe un cliente con ese RUT.');
+        return;
+      }
+    }
+
+    if (entity === 'supplier') {
+      draft.phone = normalizePhone(draft.phone || '');
+      draft.email = normalizeEmail(draft.email || '');
+      if (!validatePhone(draft.phone)) {
+        setEditError('Telefono invalido. Usa formato +56912345678.');
+        return;
+      }
+      if (!validateEmail(draft.email)) {
+        setEditError('Correo invalido. Ejemplo: contacto@proveedor.cl');
+        return;
+      }
+    }
+
+    const entries = Object.entries(draft);
+
+    if (entity === 'client') entries.forEach(([key, value]) => handleClientInlineChange(id, key, value));
+    if (entity === 'route') entries.forEach(([key, value]) => handleRouteInlineChange(id, key, value));
+    if (entity === 'scale') entries.forEach(([key, value]) => handleScaleInlineChange(id, key, value));
+    if (entity === 'purchase') entries.forEach(([key, value]) => handlePurchaseInlineChange(id, key, value));
+    if (entity === 'product') entries.forEach(([key, value]) => handleProductInlineChange(id, key, value));
+    if (entity === 'sale') entries.forEach(([key, value]) => handleSaleInlineChange(id, key, value));
+    if (entity === 'supplier') entries.forEach(([key, value]) => handleSupplierInlineChange(id, key, value));
+    if (entity === 'cityRate') entries.forEach(([key, value]) => handleCityRateInlineChange(id, key, value));
+
+    closeEditModal();
   };
 
   const topProducts = salesByProduct.slice(0, 5);
   const topClients = salesByClient.slice(0, 5);
   const bottomClients = [...salesByClient].reverse().slice(0, 5).reverse();
+  const suppliersWithRelations = suppliers.map((supplier) => {
+    const supplierId = String(supplier.id || '');
+    const supplierProducts = productsBySupplier.get(supplierId) || [];
+    const supplierPurchases = purchases.filter((purchase) => String(purchase.supplierId || '') === supplierId);
+    return {
+      ...supplier,
+      productsCount: supplierProducts.length,
+      purchasesCount: supplierPurchases.length,
+      productNames: supplierProducts.map((product) => product.product).filter(Boolean),
+    };
+  });
   const dashboardMetrics = [
     { id: 'sales-month', title: 'Ventas del mes', value: formatCurrency(totals.salesTotal) },
     { id: 'profit-month', title: 'Utilidad del mes', value: formatCurrency(totals.profitTotal) },
@@ -827,7 +1489,7 @@ function ERPView({
             <div className="form-grid">
               <label className="field field-wide">
                 <span>Nombre cliente</span>
-                <input value={clientForm.name} onChange={updateClientField('name')} />
+                <input value={clientForm.name} onChange={updateClientField('name')} placeholder="Ej: Almacen Don Pedro" />
               </label>
               <label className="field">
                 <span>Tipo</span>
@@ -851,23 +1513,23 @@ function ERPView({
               </label>
               <label className="field">
                 <span>RUT</span>
-                <input value={clientForm.rut} onChange={updateClientField('rut')} />
+                <input value={clientForm.rut} onChange={updateClientField('rut')} placeholder="Ej: 76.123.456-7" />
               </label>
               <label className="field">
                 <span>Contacto</span>
-                <input value={clientForm.contact} onChange={updateClientField('contact')} />
+                <input value={clientForm.contact} onChange={updateClientField('contact')} placeholder="Ej: Pedro Munoz" />
               </label>
               <label className="field">
                 <span>Telefono</span>
-                <input value={clientForm.phone} onChange={updateClientField('phone')} />
+                <input value={clientForm.phone} onChange={updateClientField('phone')} placeholder="Ej: +56912345678" />
               </label>
               <label className="field">
                 <span>WhatsApp</span>
-                <input value={clientForm.whatsapp} onChange={updateClientField('whatsapp')} />
+                <input value={clientForm.whatsapp} onChange={updateClientField('whatsapp')} placeholder="Ej: +56912345678" />
               </label>
               <label className="field field-wide">
                 <span>Email</span>
-                <input value={clientForm.email} onChange={updateClientField('email')} />
+                <input value={clientForm.email} onChange={updateClientField('email')} placeholder="Ej: compras@cliente.cl" />
               </label>
               <label className="field field-wide">
                 <span>Instagram</span>
@@ -875,15 +1537,15 @@ function ERPView({
               </label>
               <label className="field field-wide">
                 <span>Direccion</span>
-                <input value={clientForm.address} onChange={updateClientField('address')} />
+                <input value={clientForm.address} onChange={updateClientField('address')} placeholder="Ej: Pedro de Valdivia 402" />
               </label>
               <label className="field">
                 <span>Zona</span>
-                <input value={clientForm.zone} onChange={updateClientField('zone')} />
+                <input value={clientForm.zone} onChange={updateClientField('zone')} placeholder="Ej: Villarrica" />
               </label>
               <label className="field">
                 <span>Sector</span>
-                <input value={clientForm.sector} onChange={updateClientField('sector')} />
+                <input value={clientForm.sector} onChange={updateClientField('sector')} placeholder="Ej: Segunda Faja" />
               </label>
               <label className="field">
                 <span>Frecuencia visita</span>
@@ -903,28 +1565,16 @@ function ERPView({
                 </select>
               </label>
               <label className="field">
-                <span>Deuda actual</span>
-                <input type="number" min="0" step="1" value={clientForm.debt} onChange={updateClientField('debt')} />
-              </label>
-              <label className="field">
                 <span>Meta mensual</span>
-                <input type="number" min="0" step="1" value={clientForm.monthlyTarget} onChange={updateClientField('monthlyTarget')} />
-              </label>
-              <label className="field">
-                <span>Ventas acumuladas</span>
-                <input type="number" min="0" step="1" value={clientForm.accumulatedSales} onChange={updateClientField('accumulatedSales')} />
-              </label>
-              <label className="field">
-                <span>Progreso meta (0-1)</span>
-                <input type="number" min="0" max="1" step="0.01" value={clientForm.goalProgress} onChange={updateClientField('goalProgress')} />
+                <input type="number" min="0" step="1" value={clientForm.monthlyTarget} onChange={updateClientField('monthlyTarget')} placeholder="Ej: 350000" />
               </label>
               <label className="field">
                 <span>Limite credito</span>
-                <input type="number" min="0" step="1" value={clientForm.creditLimit} onChange={updateClientField('creditLimit')} />
+                <input type="number" min="0" step="1" value={clientForm.creditLimit} onChange={updateClientField('creditLimit')} placeholder="Ej: 120000" />
               </label>
               <label className="field field-wide">
                 <span>Notas</span>
-                <textarea rows="3" value={clientForm.notes} onChange={updateClientField('notes')} />
+                <textarea rows="3" value={clientForm.notes} onChange={updateClientField('notes')} placeholder="Ej: Prefiere entregas martes AM" />
               </label>
             </div>
 
@@ -940,7 +1590,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table erp-wide-table">
+              <table className="items-table erp-wide-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>ID</th>
@@ -955,6 +1605,7 @@ function ERPView({
                     <th>Acumulado</th>
                     <th>Progreso</th>
                     <th>Estado</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -962,7 +1613,7 @@ function ERPView({
                     <tr key={client.id}>
                       <td>{client.id}</td>
                       <td>
-                        <strong>{client.name}</strong>
+                        <strong>{client.name || '-'}</strong>
                         <div className="muted">{client.rut || '-'}</div>
                       </td>
                       <td>{client.type || '-'}</td>
@@ -975,6 +1626,17 @@ function ERPView({
                       <td>{formatCurrency(client.accumulatedSales || 0)}</td>
                       <td>{formatPercent(client.goalProgress || 0)}</td>
                       <td>{client.status || 'Activo'}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('client', client.id, {
+                            name: client.name || '', type: client.type || CLIENT_TYPES[0], status: client.status || 'Activo', rut: client.rut || '',
+                            zone: client.zone || '', sector: client.sector || '', contact: client.contact || '', phone: client.phone || '', email: client.email || '', debt: String(client.debt ?? 0),
+                            monthlyTarget: String(client.monthlyTarget ?? 0), accumulatedSales: String(client.accumulatedSales ?? 0), goalProgress: String(client.goalProgress ?? 0),
+                          })}>
+                            Editar
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1009,11 +1671,11 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Zona</span>
-                <input value={routeForm.zone} onChange={updateRouteField('zone')} />
+                <input value={routeForm.zone} onChange={updateRouteField('zone')} placeholder="Ej: Villarrica" />
               </label>
               <label className="field">
                 <span>Sector</span>
-                <input value={routeForm.sector} onChange={updateRouteField('sector')} />
+                <input value={routeForm.sector} onChange={updateRouteField('sector')} placeholder="Ej: Segunda Faja" />
               </label>
               <label className="field">
                 <span>Clientes visitados</span>
@@ -1037,7 +1699,7 @@ function ERPView({
               </label>
               <label className="field field-wide">
                 <span>Observacion</span>
-                <textarea rows="3" value={routeForm.observation} onChange={updateRouteField('observation')} />
+                <textarea rows="3" value={routeForm.observation} onChange={updateRouteField('observation')} placeholder="Ej: Ruta con trafico alto" />
               </label>
             </div>
 
@@ -1053,7 +1715,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table">
+              <table className="items-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>Fecha</th>
@@ -1066,6 +1728,7 @@ function ERPView({
                     <th>Ventas</th>
                     <th>Km</th>
                     <th>Combustible</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1081,6 +1744,17 @@ function ERPView({
                       <td>{formatCurrency(route.sales || 0)}</td>
                       <td>{formatInteger(route.kmRoute || 0)}</td>
                       <td>{formatCurrency(route.fuel || 0)}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('route', route.id, {
+                            date: route.date || '', zone: route.zone || '', sector: route.sector || '', seller: route.seller || ROUTE_SELLERS[0],
+                            visitedClients: String(route.visitedClients ?? 0), clientsWithOrder: String(route.clientsWithOrder ?? 0), sales: String(route.sales ?? 0),
+                            kmRoute: String(route.kmRoute ?? 0), fuel: String(route.fuel ?? 0), observation: route.observation || '',
+                          })}>
+                            Editar
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1101,7 +1775,7 @@ function ERPView({
             <div className="form-grid">
               <label className="field field-wide">
                 <span>Nombre escala</span>
-                <input value={scaleForm.label} onChange={updateScaleField('label')} />
+                <input value={scaleForm.label} onChange={updateScaleField('label')} placeholder="Ej: Mayorista base" />
               </label>
               <label className="field">
                 <span>Cantidad minima</span>
@@ -1117,11 +1791,11 @@ function ERPView({
               </label>
               <label className="field field-wide">
                 <span>Objetivo comercial</span>
-                <input value={scaleForm.objective} onChange={updateScaleField('objective')} />
+                <input value={scaleForm.objective} onChange={updateScaleField('objective')} placeholder="Ej: Activar recompra" />
               </label>
               <label className="field field-wide">
                 <span>Comentario</span>
-                <textarea rows="3" value={scaleForm.comment} onChange={updateScaleField('comment')} />
+                <textarea rows="3" value={scaleForm.comment} onChange={updateScaleField('comment')} placeholder="Ej: Pedido mixto" />
               </label>
             </div>
 
@@ -1137,7 +1811,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table">
+              <table className="items-table erp-table-min-900">
                 <thead>
                   <tr>
                     <th>Escala</th>
@@ -1146,56 +1820,30 @@ function ERPView({
                     <th>Desc.</th>
                     <th>Objetivo</th>
                     <th>Comentario</th>
-                    <th />
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {scales.map((scale) => (
                     <tr key={scale.id}>
-                      <td>
-                        <input value={scale.label || ''} onChange={(event) => handleScaleInlineChange(scale.id, 'label', event.target.value)} />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="1"
-                          step="1"
-                          value={scale.minQuantity ?? 1}
-                          onChange={(event) => handleScaleInlineChange(scale.id, 'minQuantity', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="1"
-                          step="1"
-                          value={scale.maxQuantity ?? 1}
-                          onChange={(event) => handleScaleInlineChange(scale.id, 'maxQuantity', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          max="0.95"
-                          step="0.01"
-                          value={scale.discountRate ?? 0}
-                          onChange={(event) => handleScaleInlineChange(scale.id, 'discountRate', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          value={scale.objective || ''}
-                          onChange={(event) => handleScaleInlineChange(scale.id, 'objective', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input value={scale.comment || ''} onChange={(event) => handleScaleInlineChange(scale.id, 'comment', event.target.value)} />
-                      </td>
-                      <td>
-                        <button className="icon-button" type="button" onClick={() => handleDeleteScale(scale.id)} aria-label={`Eliminar escala ${scale.label || scale.id}`}>
-                          x
-                        </button>
+                      <td>{scale.label || '-'}</td>
+                      <td>{formatInteger(scale.minQuantity || 0)}</td>
+                      <td>{formatInteger(scale.maxQuantity || 0)}</td>
+                      <td>{formatPercent(scale.discountRate || 0)}</td>
+                      <td>{scale.objective || '-'}</td>
+                      <td>{scale.comment || '-'}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('scale', scale.id, {
+                            label: scale.label || '', minQuantity: String(scale.minQuantity ?? 1), maxQuantity: String(scale.maxQuantity ?? 1),
+                            discountRate: String(scale.discountRate ?? 0), objective: scale.objective || '', comment: scale.comment || '',
+                          })}>
+                            Editar
+                          </button>
+                          <button className="button button-small button-danger" type="button" onClick={() => handleDeleteScale(scale.id)} aria-label={`Eliminar escala ${scale.label || scale.id}`}>
+                            Eliminar
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1221,31 +1869,50 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Proveedor</span>
-                <input value={purchaseForm.supplier} onChange={updatePurchaseField('supplier')} />
+                <select value={purchaseForm.supplierId} onChange={handlePurchaseSupplierChange} required>
+                  <option value="">Selecciona proveedor</option>
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.name}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="field">
                 <span>Orden compra</span>
-                <input value={purchaseForm.purchaseOrder} onChange={updatePurchaseField('purchaseOrder')} />
+                <input value={purchaseForm.purchaseOrder} onChange={updatePurchaseField('purchaseOrder')} placeholder="Ej: OC-2026-001" />
               </label>
               <label className="field">
                 <span>SKU</span>
-                <input value={purchaseForm.sku} onChange={updatePurchaseField('sku')} />
+                <input value={purchaseForm.productSku} readOnly placeholder="Se completa al elegir producto" />
               </label>
               <label className="field field-wide">
                 <span>Producto</span>
-                <input value={purchaseForm.product} onChange={updatePurchaseField('product')} />
+                <select
+                  value={purchaseForm.productSku}
+                  onChange={updatePurchaseField('productSku')}
+                  disabled={!purchaseForm.supplierId}
+                  required
+                >
+                  <option value="">Selecciona producto</option>
+                  {purchaseProductsForSupplier.map((product) => (
+                    <option key={product.sku} value={product.sku}>
+                      {product.product} ({product.sku})
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="field">
                 <span>Cantidad</span>
-                <input type="number" min="1" step="1" value={purchaseForm.quantity} onChange={updatePurchaseField('quantity')} />
+                <input type="number" min="1" step="1" value={purchaseForm.quantity} onChange={updatePurchaseField('quantity')} required />
               </label>
               <label className="field">
                 <span>Costo unitario</span>
-                <input type="number" min="0" step="1" value={purchaseForm.unitCost} onChange={updatePurchaseField('unitCost')} />
+                <input type="number" min="0" step="1" value={purchaseForm.unitCost} onChange={updatePurchaseField('unitCost')} placeholder="Ej: 1850" required />
               </label>
               <label className="field">
                 <span>Transporte unidad</span>
-                <input type="number" min="0" step="1" value={purchaseForm.transportUnit} onChange={updatePurchaseField('transportUnit')} />
+                <input type="number" min="0" step="1" value={purchaseForm.transportUnit} onChange={updatePurchaseField('transportUnit')} placeholder="Ej: 120" />
               </label>
               <label className="field">
                 <span>Recepcion</span>
@@ -1259,11 +1926,11 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Documento</span>
-                <input value={purchaseForm.doc} onChange={updatePurchaseField('doc')} />
+                <input value={purchaseForm.doc} onChange={updatePurchaseField('doc')} placeholder="Ej: G-1004" />
               </label>
               <label className="field field-wide">
                 <span>Observacion</span>
-                <textarea rows="3" value={purchaseForm.observation} onChange={updatePurchaseField('observation')} />
+                <textarea rows="3" value={purchaseForm.observation} onChange={updatePurchaseField('observation')} placeholder="Ej: Recepcion completa" />
               </label>
             </div>
 
@@ -1279,7 +1946,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table erp-wide-table">
+              <table className="items-table erp-wide-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>Fecha</th>
@@ -1293,6 +1960,7 @@ function ERPView({
                     <th>Costo total</th>
                     <th>Recepcion</th>
                     <th>Doc</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1307,8 +1975,19 @@ function ERPView({
                       <td>{formatCurrency(purchase.unitCost || 0)}</td>
                       <td>{formatCurrency(purchase.transportUnit || 0)}</td>
                       <td>{formatCurrency(purchase.totalCost || 0)}</td>
-                      <td>{purchase.reception || '-'}</td>
+                      <td>{purchase.reception || 'Recibido'}</td>
                       <td>{purchase.doc || '-'}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('purchase', purchase.id, {
+                            date: purchase.date || '', supplierId: purchase.supplierId || '', purchaseOrder: purchase.purchaseOrder || '', quantity: String(purchase.quantity ?? 1),
+                            unitCost: String(purchase.unitCost ?? 0), transportUnit: String(purchase.transportUnit ?? 0), reception: purchase.reception || 'Recibido', doc: purchase.doc || '',
+                            observation: purchase.observation || '',
+                          })}>
+                            Editar
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1322,50 +2001,93 @@ function ERPView({
         <div className="erp-content-layout">
           <form className="panel erp-form" onSubmit={handleAddProduct}>
             <div className="panel-title">
-              <h3>Alta de producto completo</h3>
+              <h3>Agregar productos nuevos</h3>
               <p className="muted">SKU, costos, margen, stock y estado operativo.</p>
             </div>
 
-            <div className="form-grid">
+            <div className="erp-form-section">
+              <div className="erp-form-section-title">1. Proveedor</div>
+              <div className="form-grid">
+              <label className="field">
+                <span>Proveedor</span>
+                <select value={productForm.createSupplier} onChange={updateProductField('createSupplier')}>
+                  <option value="false">Usar proveedor existente</option>
+                  <option value="true">Crear proveedor nuevo</option>
+                </select>
+              </label>
+              {productForm.createSupplier === 'true' ? (
+                <>
+                  <label className="field field-wide">
+                    <span>Nombre proveedor nuevo</span>
+                    <input value={productForm.newSupplierName} onChange={updateProductField('newSupplierName')} placeholder="Ej: Proveedor Bebidas" required />
+                  </label>
+                  <label className="field">
+                    <span>Contacto proveedor</span>
+                    <input value={productForm.newSupplierContact} onChange={updateProductField('newSupplierContact')} placeholder="Ej: Camila Soto" />
+                  </label>
+                  <label className="field">
+                    <span>Telefono proveedor</span>
+                    <input value={productForm.newSupplierPhone} onChange={updateProductField('newSupplierPhone')} placeholder="Ej: +56998765432" />
+                  </label>
+                  <label className="field field-wide">
+                    <span>Email proveedor</span>
+                    <input value={productForm.newSupplierEmail} onChange={updateProductField('newSupplierEmail')} placeholder="Ej: contacto@proveedor.cl" />
+                  </label>
+                </>
+              ) : (
+                <label className="field field-wide">
+                  <span>Proveedor existente</span>
+                  <select value={productForm.supplierId} onChange={updateProductField('supplierId')} required>
+                    <option value="">Selecciona proveedor</option>
+                    {suppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              </div>
+            </div>
+
+            <div className="erp-form-section">
+              <div className="erp-form-section-title">2. Datos del producto</div>
+              <div className="form-grid">
               <label className="field">
                 <span>SKU</span>
-                <input value={productForm.sku} onChange={updateProductField('sku')} />
+                <input value={productForm.sku} onChange={updateProductField('sku')} placeholder="Ej: THO-BEB-001" required />
               </label>
               <label className="field">
                 <span>Codigo barra</span>
-                <input value={productForm.barcode} onChange={updateProductField('barcode')} />
+                <input value={productForm.barcode} onChange={updateProductField('barcode')} placeholder="Ej: 7801234567890" />
               </label>
               <label className="field">
                 <span>Categoria</span>
-                <input value={productForm.category} onChange={updateProductField('category')} />
+                <input value={productForm.category} onChange={updateProductField('category')} placeholder="Ej: Bebidas" />
               </label>
               <label className="field field-wide">
                 <span>Nombre producto</span>
-                <input value={productForm.product} onChange={updateProductField('product')} />
+                <input value={productForm.product} onChange={updateProductField('product')} placeholder="Ej: Energetica Score 735 ml" required />
               </label>
               <label className="field">
                 <span>Marca</span>
-                <input value={productForm.brand} onChange={updateProductField('brand')} />
+                <input value={productForm.brand} onChange={updateProductField('brand')} placeholder="Ej: Score" />
               </label>
               <label className="field">
                 <span>Unidad</span>
-                <input value={productForm.unit} onChange={updateProductField('unit')} />
+                <input value={productForm.unit} onChange={updateProductField('unit')} placeholder="Ej: Unidad" />
               </label>
               <label className="field">
-                <span>Costo compra</span>
+                <span>Costo unitario de compra</span>
                 <input type="number" min="0" step="1" value={productForm.purchaseCost} onChange={updateProductField('purchaseCost')} />
               </label>
               <label className="field">
-                <span>Transporte unidad</span>
+                <span>Transporte por unidad</span>
                 <input type="number" min="0" step="1" value={productForm.transportUnit} onChange={updateProductField('transportUnit')} />
               </label>
               <label className="field">
-                <span>Precio venta base</span>
+                <span>Precio minimo/base de venta</span>
                 <input type="number" min="0" step="1" value={productForm.salePriceBase} onChange={updateProductField('salePriceBase')} />
-              </label>
-              <label className="field">
-                <span>Stock actual</span>
-                <input type="number" min="0" step="1" value={productForm.stock} onChange={updateProductField('stock')} />
               </label>
               <label className="field">
                 <span>Stock minimo</span>
@@ -1373,7 +2095,7 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Ubicacion</span>
-                <input value={productForm.location} onChange={updateProductField('location')} />
+                <input value={productForm.location} onChange={updateProductField('location')} placeholder="Ej: Bodega B" />
               </label>
               <label className="field">
                 <span>Estado</span>
@@ -1385,6 +2107,47 @@ function ERPView({
                   ))}
                 </select>
               </label>
+              </div>
+            </div>
+
+            <div className="erp-form-section">
+              <div className="erp-form-section-title">3. Compra inicial</div>
+              <div className="form-grid">
+              <label className="field">
+                <span>Cantidad comprada inicialmente</span>
+                <input type="number" min="1" step="1" value={productForm.initialPurchaseQuantity} onChange={updateProductField('initialPurchaseQuantity')} required />
+              </label>
+              <label className="field field-wide">
+                <span>Costo real unitario (compra + transporte)</span>
+                <input
+                  type="text"
+                  value={formatCurrency(Math.max(0, Math.round(asNumber(productForm.purchaseCost, 0) + asNumber(productForm.transportUnit, 0))))}
+                  readOnly
+                />
+              </label>
+              <label className="field">
+                <span>Orden de compra inicial</span>
+                <input value={productForm.initialPurchaseOrder} onChange={updateProductField('initialPurchaseOrder')} />
+              </label>
+              <label className="field">
+                <span>Documento inicial</span>
+                <input value={productForm.initialPurchaseDoc} onChange={updateProductField('initialPurchaseDoc')} />
+              </label>
+              <label className="field">
+                <span>Recepcion inicial</span>
+                <select value={productForm.initialPurchaseReception} onChange={updateProductField('initialPurchaseReception')}>
+                  {RECEPTION_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field field-wide">
+                <span>Observacion compra inicial</span>
+                <textarea rows="3" value={productForm.initialPurchaseObservation} onChange={updateProductField('initialPurchaseObservation')} placeholder="Ej: Recepcion parcial, revisar lote" />
+              </label>
+            </div>
             </div>
 
             <button className="button button-primary" type="submit">
@@ -1394,12 +2157,12 @@ function ERPView({
 
           <div className="panel erp-list-panel">
             <div className="panel-title">
-              <h3>Maestro de productos</h3>
+              <h3>Inventario de productos</h3>
               <p className="muted">Edicion rapida de stock, precio y estado.</p>
             </div>
 
             <div className="table-wrap">
-              <table className="items-table erp-wide-table">
+              <table className="items-table erp-wide-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>SKU</th>
@@ -1412,6 +2175,7 @@ function ERPView({
                     <th>Utilidad</th>
                     <th>Margen</th>
                     <th>Estado</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1423,44 +2187,22 @@ function ERPView({
                         <div className="muted">{product.brand || '-'}</div>
                       </td>
                       <td>{product.category || '-'}</td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={product.stock ?? 0}
-                          onChange={(event) => handleProductInlineChange(product.sku, 'stock', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={product.stockMin ?? 0}
-                          onChange={(event) => handleProductInlineChange(product.sku, 'stockMin', event.target.value)}
-                        />
-                      </td>
+                      <td>{formatInteger(product.stock || 0)}</td>
+                      <td>{formatInteger(product.stockMin || 0)}</td>
                       <td>{formatCurrency(product.finalCost || 0)}</td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={product.salePriceBase ?? 0}
-                          onChange={(event) => handleProductInlineChange(product.sku, 'salePriceBase', event.target.value)}
-                        />
-                      </td>
+                      <td>{formatCurrency(product.salePriceBase || 0)}</td>
                       <td>{formatCurrency(product.unitProfit || 0)}</td>
                       <td>{formatPercent(product.marginPct || 0)}</td>
-                      <td>
-                        <select value={product.status || 'Activo'} onChange={(event) => handleProductInlineChange(product.sku, 'status', event.target.value)}>
-                          {PRODUCT_STATUSES.map((status) => (
-                            <option key={status} value={status}>
-                              {status}
-                            </option>
-                          ))}
-                        </select>
+                      <td>{product.status || 'Activo'}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('product', product.sku, {
+                            stock: String(product.stock ?? 0), stockMin: String(product.stockMin ?? 0), salePriceBase: String(product.salePriceBase ?? 0),
+                            status: product.status || 'Activo',
+                          })}>
+                            Editar
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1486,15 +2228,15 @@ function ERPView({
               </label>
               <label className="field">
                 <span>Cliente</span>
-                <input value={saleForm.client} onChange={updateSaleField('client')} />
+                <input value={saleForm.client} onChange={updateSaleField('client')} placeholder="Ej: Cafe Araucania" />
               </label>
               <label className="field">
                 <span>Zona</span>
-                <input value={saleForm.zone} onChange={updateSaleField('zone')} />
+                <input value={saleForm.zone} onChange={updateSaleField('zone')} placeholder="Ej: Pucon" />
               </label>
               <label className="field">
                 <span>Sector</span>
-                <input value={saleForm.sector} onChange={updateSaleField('sector')} />
+                <input value={saleForm.sector} onChange={updateSaleField('sector')} placeholder="Ej: Centro" />
               </label>
               <label className="field">
                 <span>Vendedor</span>
@@ -1512,7 +2254,7 @@ function ERPView({
               </label>
               <label className="field field-wide">
                 <span>Producto</span>
-                <input value={saleForm.product} onChange={updateSaleField('product')} />
+                <input value={saleForm.product} onChange={updateSaleField('product')} placeholder="Ej: Agua 1.5 L" />
               </label>
               <label className="field">
                 <span>Venta</span>
@@ -1556,7 +2298,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table erp-wide-table">
+              <table className="items-table erp-wide-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>Fecha</th>
@@ -1570,6 +2312,7 @@ function ERPView({
                     <th>Margen</th>
                     <th>Pago</th>
                     <th>Despacho</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1584,8 +2327,19 @@ function ERPView({
                       <td>{formatCurrency(row.cost || 0)}</td>
                       <td>{formatCurrency(row.profit || 0)}</td>
                       <td>{formatPercent(row.marginPct || 0)}</td>
-                      <td>{row.paymentMethod || '-'}</td>
-                      <td>{row.dispatchStatus || '-'}</td>
+                      <td>{row.paymentMethod || PAYMENT_METHODS[0]}</td>
+                      <td>{row.dispatchStatus || DISPATCH_STATUSES[0]}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('sale', row.id, {
+                            date: row.date || '', client: row.client || '', zone: row.zone || '', orderCode: row.orderCode || '', product: row.product || '',
+                            sale: String(row.sale ?? 0), cost: String(row.cost ?? 0), paymentMethod: row.paymentMethod || PAYMENT_METHODS[0],
+                            dispatchStatus: row.dispatchStatus || DISPATCH_STATUSES[0],
+                          })}>
+                            Editar
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1596,59 +2350,17 @@ function ERPView({
       ) : null}
 
       {tab === 'proveedores' ? (
-        <div className="erp-content-layout">
-          <form className="panel erp-form" onSubmit={handleAddSupplier}>
-            <div className="panel-title">
-              <h3>Alta de proveedor</h3>
-              <p className="muted">Gestion de contactos y disponibilidad de abastecimiento.</p>
-            </div>
-
-            <div className="form-grid">
-              <label className="field field-wide">
-                <span>Nombre proveedor</span>
-                <input value={supplierForm.name} onChange={updateSupplierField('name')} />
-              </label>
-              <label className="field">
-                <span>Contacto</span>
-                <input value={supplierForm.contact} onChange={updateSupplierField('contact')} />
-              </label>
-              <label className="field">
-                <span>Telefono</span>
-                <input value={supplierForm.phone} onChange={updateSupplierField('phone')} />
-              </label>
-              <label className="field field-wide">
-                <span>Email</span>
-                <input value={supplierForm.email} onChange={updateSupplierField('email')} />
-              </label>
-              <label className="field">
-                <span>Estado</span>
-                <select value={supplierForm.status} onChange={updateSupplierField('status')}>
-                  {SUPPLIER_STATUSES.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field field-wide">
-                <span>Notas</span>
-                <textarea rows="3" value={supplierForm.notes} onChange={updateSupplierField('notes')} />
-              </label>
-            </div>
-
-            <button className="button button-primary" type="submit">
-              Guardar proveedor
-            </button>
-          </form>
-
+        <div className="erp-content-layout erp-content-layout-full">
           <div className="panel erp-list-panel">
             <div className="panel-title">
-              <h3>Maestro de proveedores</h3>
-              <p className="muted">Referencia de proveedores activos y contactos directos.</p>
+              <h3>Proveedores</h3>
+              <p className="muted">Consulta de proveedores, sus productos y compras relacionadas.</p>
             </div>
 
+            <p className="muted">Los proveedores nuevos se crean desde Productos al registrar producto con compra inicial.</p>
+
             <div className="table-wrap">
-              <table className="items-table">
+              <table className="items-table erp-wide-table suppliers-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>Proveedor</th>
@@ -1656,18 +2368,37 @@ function ERPView({
                     <th>Telefono</th>
                     <th>Email</th>
                     <th>Estado</th>
+                    <th>Productos</th>
+                    <th>Compras</th>
                     <th>Notas</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {suppliers.map((supplier) => (
+                  {suppliersWithRelations.map((supplier) => (
                     <tr key={supplier.id}>
                       <td>{supplier.name || '-'}</td>
                       <td>{supplier.contact || '-'}</td>
                       <td>{supplier.phone || '-'}</td>
                       <td>{supplier.email || '-'}</td>
-                      <td>{supplier.status || '-'}</td>
+                      <td>{supplier.status || 'Activo'}</td>
+                      <td>
+                        {supplier.productsCount > 0
+                          ? `${supplier.productsCount} (${supplier.productNames.slice(0, 2).join(', ')}${supplier.productsCount > 2 ? ', ...' : ''})`
+                          : '0'}
+                      </td>
+                      <td>{supplier.purchasesCount}</td>
                       <td>{supplier.notes || '-'}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('supplier', supplier.id, {
+                            name: supplier.name || '', contact: supplier.contact || '', phone: supplier.phone || '', email: supplier.email || '',
+                            status: supplier.status || 'Activo', notes: supplier.notes || '',
+                          })}>
+                            Editar
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1691,8 +2422,8 @@ function ERPView({
                 <input value={cityRateForm.city} onChange={updateCityRateField('city')} placeholder="Ej: Pucon" />
               </label>
               <label className="field">
-                <span>Tarifa (0-0.95)</span>
-                <input type="number" min="0" max="0.95" step="0.005" value={cityRateForm.rate} onChange={updateCityRateField('rate')} />
+                <span>Tarifa (%)</span>
+                <input type="number" min="0" max="95" step="0.1" value={cityRateForm.rate} onChange={updateCityRateField('rate')} />
               </label>
             </div>
 
@@ -1708,39 +2439,158 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table">
+              <table className="items-table erp-table-min-900">
                 <thead>
                   <tr>
                     <th>Ciudad</th>
                     <th>Tarifa</th>
-                    <th />
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {cityRates.map((row) => (
                     <tr key={row.id}>
-                      <td>
-                        <input value={row.city || ''} onChange={(event) => handleCityRateInlineChange(row.id, 'city', event.target.value)} />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          max="0.95"
-                          step="0.005"
-                          value={row.rate ?? 0}
-                          onChange={(event) => handleCityRateInlineChange(row.id, 'rate', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <button className="icon-button" type="button" onClick={() => handleDeleteCityRate(row.id)} aria-label={`Eliminar tarifa ${row.city || row.id}`}>
-                          x
-                        </button>
+                      <td>{row.city || '-'}</td>
+                      <td>{formatPercent(row.rate || 0)}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('cityRate', row.id, {
+                            city: row.city || '', rate: String(Math.round((row.rate ?? 0) * 1000) / 10),
+                          })}>
+                            Editar
+                          </button>
+                          <button className="button button-small button-danger" type="button" onClick={() => handleDeleteCityRate(row.id)} aria-label={`Eliminar tarifa ${row.city || row.id}`}>
+                            Eliminar
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {editModal ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Editar registro ERP">
+          <div className="panel modal-card">
+            <div className="panel-title">
+              <h3>Editar registro</h3>
+              <p className="muted">Actualiza solo el elemento seleccionado.</p>
+            </div>
+
+            {editError ? (
+              <div className="notice notice-error" role="alert">
+                {editError}
+              </div>
+            ) : null}
+
+            <div className="form-grid">
+              {editModal.entity === 'client' ? (
+                <>
+                  <label className="field"><span>Nombre</span><input value={editModal.draft.name || ''} onChange={updateEditDraft('name')} /></label>
+                  <label className="field"><span>Tipo</span><select value={editModal.draft.type || CLIENT_TYPES[0]} onChange={updateEditDraft('type')}>{CLIENT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
+                  <label className="field"><span>Estado</span><select value={editModal.draft.status || 'Activo'} onChange={updateEditDraft('status')}>{CLIENT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+                  <label className="field"><span>RUT (12345678-5)</span><input value={editModal.draft.rut || ''} onChange={updateEditDraft('rut')} placeholder="12345678-5" /></label>
+                  <label className="field"><span>Zona</span><input value={editModal.draft.zone || ''} onChange={updateEditDraft('zone')} /></label>
+                  <label className="field"><span>Sector</span><input value={editModal.draft.sector || ''} onChange={updateEditDraft('sector')} /></label>
+                  <label className="field"><span>Contacto</span><input value={editModal.draft.contact || ''} onChange={updateEditDraft('contact')} /></label>
+                  <label className="field"><span>Telefono (+56912345678)</span><input value={editModal.draft.phone || ''} onChange={updateEditDraft('phone')} placeholder="+56912345678" /></label>
+                  <label className="field"><span>Email (nombre@dominio.cl)</span><input value={editModal.draft.email || ''} onChange={updateEditDraft('email')} placeholder="nombre@dominio.cl" /></label>
+                  <label className="field"><span>Deuda</span><input type="number" min="0" step="1" value={editModal.draft.debt || 0} onChange={updateEditDraft('debt')} /></label>
+                  <label className="field"><span>Meta mensual</span><input type="number" min="0" step="1" value={editModal.draft.monthlyTarget || 0} onChange={updateEditDraft('monthlyTarget')} /></label>
+                  <label className="field"><span>Acumulado</span><input type="number" min="0" step="1" value={editModal.draft.accumulatedSales || 0} onChange={updateEditDraft('accumulatedSales')} /></label>
+                  <label className="field"><span>Progreso</span><input type="number" min="0" max="1" step="0.01" value={editModal.draft.goalProgress || 0} onChange={updateEditDraft('goalProgress')} /></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'route' ? (
+                <>
+                  <label className="field"><span>Fecha</span><input type="date" value={editModal.draft.date || ''} onChange={updateEditDraft('date')} /></label>
+                  <label className="field"><span>Vendedor</span><select value={editModal.draft.seller || ROUTE_SELLERS[0]} onChange={updateEditDraft('seller')}>{ROUTE_SELLERS.map((seller) => <option key={seller} value={seller}>{seller}</option>)}</select></label>
+                  <label className="field"><span>Zona</span><input value={editModal.draft.zone || ''} onChange={updateEditDraft('zone')} /></label>
+                  <label className="field"><span>Sector</span><input value={editModal.draft.sector || ''} onChange={updateEditDraft('sector')} /></label>
+                  <label className="field"><span>Visitados</span><input type="number" min="0" step="1" value={editModal.draft.visitedClients || 0} onChange={updateEditDraft('visitedClients')} /></label>
+                  <label className="field"><span>Con pedido</span><input type="number" min="0" step="1" value={editModal.draft.clientsWithOrder || 0} onChange={updateEditDraft('clientsWithOrder')} /></label>
+                  <label className="field"><span>Ventas</span><input type="number" min="0" step="1" value={editModal.draft.sales || 0} onChange={updateEditDraft('sales')} /></label>
+                  <label className="field"><span>Km</span><input type="number" min="0" step="1" value={editModal.draft.kmRoute || 0} onChange={updateEditDraft('kmRoute')} /></label>
+                  <label className="field"><span>Combustible</span><input type="number" min="0" step="1" value={editModal.draft.fuel || 0} onChange={updateEditDraft('fuel')} /></label>
+                  <label className="field field-wide"><span>Observacion</span><textarea rows="3" value={editModal.draft.observation || ''} onChange={updateEditDraft('observation')} /></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'scale' ? (
+                <>
+                  <label className="field field-wide"><span>Escala</span><input value={editModal.draft.label || ''} onChange={updateEditDraft('label')} /></label>
+                  <label className="field"><span>Min</span><input type="number" min="1" step="1" value={editModal.draft.minQuantity || 1} onChange={updateEditDraft('minQuantity')} /></label>
+                  <label className="field"><span>Max</span><input type="number" min="1" step="1" value={editModal.draft.maxQuantity || 1} onChange={updateEditDraft('maxQuantity')} /></label>
+                  <label className="field"><span>Descuento</span><input type="number" min="0" max="0.95" step="0.01" value={editModal.draft.discountRate || 0} onChange={updateEditDraft('discountRate')} /></label>
+                  <label className="field field-wide"><span>Objetivo</span><input value={editModal.draft.objective || ''} onChange={updateEditDraft('objective')} /></label>
+                  <label className="field field-wide"><span>Comentario</span><textarea rows="3" value={editModal.draft.comment || ''} onChange={updateEditDraft('comment')} /></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'purchase' ? (
+                <>
+                  <label className="field"><span>Fecha</span><input type="date" value={editModal.draft.date || ''} onChange={updateEditDraft('date')} /></label>
+                  <label className="field"><span>Proveedor</span><select value={editModal.draft.supplierId || ''} onChange={updateEditDraft('supplierId')}><option value="">Selecciona proveedor</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></label>
+                  <label className="field"><span>OC</span><input value={editModal.draft.purchaseOrder || ''} onChange={updateEditDraft('purchaseOrder')} /></label>
+                  <label className="field"><span>Cantidad</span><input type="number" min="1" step="1" value={editModal.draft.quantity || 1} onChange={updateEditDraft('quantity')} /></label>
+                  <label className="field"><span>Costo unit.</span><input type="number" min="0" step="1" value={editModal.draft.unitCost || 0} onChange={updateEditDraft('unitCost')} /></label>
+                  <label className="field"><span>Transporte</span><input type="number" min="0" step="1" value={editModal.draft.transportUnit || 0} onChange={updateEditDraft('transportUnit')} /></label>
+                  <label className="field"><span>Recepcion</span><select value={editModal.draft.reception || 'Recibido'} onChange={updateEditDraft('reception')}>{RECEPTION_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+                  <label className="field"><span>Doc</span><input value={editModal.draft.doc || ''} onChange={updateEditDraft('doc')} /></label>
+                  <label className="field field-wide"><span>Observacion</span><textarea rows="3" value={editModal.draft.observation || ''} onChange={updateEditDraft('observation')} /></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'product' ? (
+                <>
+                  <label className="field"><span>Stock</span><input type="number" min="0" step="1" value={editModal.draft.stock || 0} onChange={updateEditDraft('stock')} /></label>
+                  <label className="field"><span>Stock minimo</span><input type="number" min="0" step="1" value={editModal.draft.stockMin || 0} onChange={updateEditDraft('stockMin')} /></label>
+                  <label className="field"><span>Precio base</span><input type="number" min="0" step="1" value={editModal.draft.salePriceBase || 0} onChange={updateEditDraft('salePriceBase')} /></label>
+                  <label className="field"><span>Estado</span><select value={editModal.draft.status || 'Activo'} onChange={updateEditDraft('status')}>{PRODUCT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'sale' ? (
+                <>
+                  <label className="field"><span>Fecha</span><input type="date" value={editModal.draft.date || ''} onChange={updateEditDraft('date')} /></label>
+                  <label className="field"><span>Cliente</span><input value={editModal.draft.client || ''} onChange={updateEditDraft('client')} /></label>
+                  <label className="field"><span>Zona</span><input value={editModal.draft.zone || ''} onChange={updateEditDraft('zone')} /></label>
+                  <label className="field"><span>Pedido</span><input value={editModal.draft.orderCode || ''} onChange={updateEditDraft('orderCode')} /></label>
+                  <label className="field field-wide"><span>Producto</span><input value={editModal.draft.product || ''} onChange={updateEditDraft('product')} /></label>
+                  <label className="field"><span>Venta</span><input type="number" min="0" step="1" value={editModal.draft.sale || 0} onChange={updateEditDraft('sale')} /></label>
+                  <label className="field"><span>Costo</span><input type="number" min="0" step="1" value={editModal.draft.cost || 0} onChange={updateEditDraft('cost')} /></label>
+                  <label className="field"><span>Pago</span><select value={editModal.draft.paymentMethod || PAYMENT_METHODS[0]} onChange={updateEditDraft('paymentMethod')}>{PAYMENT_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}</select></label>
+                  <label className="field"><span>Despacho</span><select value={editModal.draft.dispatchStatus || DISPATCH_STATUSES[0]} onChange={updateEditDraft('dispatchStatus')}>{DISPATCH_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'supplier' ? (
+                <>
+                  <label className="field"><span>Proveedor</span><input value={editModal.draft.name || ''} onChange={updateEditDraft('name')} /></label>
+                  <label className="field"><span>Contacto</span><input value={editModal.draft.contact || ''} onChange={updateEditDraft('contact')} /></label>
+                  <label className="field"><span>Telefono (+56912345678)</span><input value={editModal.draft.phone || ''} onChange={updateEditDraft('phone')} placeholder="+56912345678" /></label>
+                  <label className="field"><span>Email (contacto@proveedor.cl)</span><input value={editModal.draft.email || ''} onChange={updateEditDraft('email')} placeholder="contacto@proveedor.cl" /></label>
+                  <label className="field"><span>Estado</span><select value={editModal.draft.status || 'Activo'} onChange={updateEditDraft('status')}>{SUPPLIER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+                  <label className="field field-wide"><span>Notas</span><textarea rows="3" value={editModal.draft.notes || ''} onChange={updateEditDraft('notes')} /></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'cityRate' ? (
+                <>
+                  <label className="field field-wide"><span>Ciudad</span><input value={editModal.draft.city || ''} onChange={updateEditDraft('city')} /></label>
+                  <label className="field"><span>Tarifa (%)</span><input type="number" min="0" max="95" step="0.1" value={editModal.draft.rate || 0} onChange={updateEditDraft('rate')} /></label>
+                </>
+              ) : null}
+            </div>
+
+            <div className="modal-actions">
+              <button className="button button-secondary" type="button" onClick={closeEditModal}>Cancelar</button>
+              <button className="button button-primary" type="button" onClick={handleSaveEdit}>Guardar cambios</button>
             </div>
           </div>
         </div>

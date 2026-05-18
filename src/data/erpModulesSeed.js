@@ -67,8 +67,10 @@ export const ERP_PURCHASES = [
   {
     id: 'comp-001',
     date: '2026-05-01',
+    supplierId: 'prov-001',
     supplier: 'Fundo El Peumo',
     purchaseOrder: 'OC-C-0001',
+    productSku: 'THO-ALI-001',
     sku: 'THO-ALI-001',
     product: 'Huevos Primera bandeja 30 un',
     quantity: 35,
@@ -82,8 +84,10 @@ export const ERP_PURCHASES = [
   {
     id: 'comp-002',
     date: '2026-05-01',
+    supplierId: 'prov-001',
     supplier: 'Fundo El Peumo',
     purchaseOrder: 'OC-C-0001',
+    productSku: 'THO-ALI-002',
     sku: 'THO-ALI-002',
     product: 'Huevos Extra caja 180 un',
     quantity: 8,
@@ -97,8 +101,10 @@ export const ERP_PURCHASES = [
   {
     id: 'comp-003',
     date: '2026-05-02',
+    supplierId: 'prov-002',
     supplier: 'Proveedor Bebidas',
     purchaseOrder: 'OC-C-0002',
+    productSku: 'THO-BEB-001',
     sku: 'THO-BEB-001',
     product: 'Energetica Score Gorilla 735 ml',
     quantity: 120,
@@ -112,8 +118,10 @@ export const ERP_PURCHASES = [
   {
     id: 'comp-004',
     date: '2026-05-04',
+    supplierId: 'prov-004',
     supplier: 'Softys/Mayorista',
     purchaseOrder: 'OC-C-0004',
+    productSku: 'THO-HIG-001',
     sku: 'THO-HIG-001',
     product: 'Papel Higienico 4 rollos',
     quantity: 90,
@@ -394,6 +402,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-HIG-001',
     sku: 'THO-HIG-001',
+    supplierId: 'prov-004',
     barcode: '780000000001',
     category: 'Higiene',
     product: 'Papel Higienico 4 rollos',
@@ -414,6 +423,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-HIG-002',
     sku: 'THO-HIG-002',
+    supplierId: 'prov-004',
     barcode: '780000000002',
     category: 'Higiene',
     product: 'Papel Higienico 12 rollos',
@@ -434,6 +444,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-HIG-003',
     sku: 'THO-HIG-003',
+    supplierId: 'prov-004',
     barcode: '780000000003',
     category: 'Higiene',
     product: 'Nova Toalla Papel 2 rollos',
@@ -454,6 +465,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-BEB-001',
     sku: 'THO-BEB-001',
+    supplierId: 'prov-002',
     barcode: '780000000004',
     category: 'Bebidas',
     product: 'Energetica Score Gorilla 735 ml',
@@ -474,6 +486,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-BEB-002',
     sku: 'THO-BEB-002',
+    supplierId: 'prov-002',
     barcode: '780000000005',
     category: 'Bebidas',
     product: 'Agua 1.5 L',
@@ -494,6 +507,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-BEB-003',
     sku: 'THO-BEB-003',
+    supplierId: 'prov-002',
     barcode: '780000000006',
     category: 'Bebidas',
     product: 'Agua pack 6 unidades',
@@ -514,6 +528,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-ALI-001',
     sku: 'THO-ALI-001',
+    supplierId: 'prov-001',
     barcode: '780000000007',
     category: 'Alimentos',
     product: 'Huevos Primera bandeja 30 un',
@@ -534,6 +549,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-ALI-002',
     sku: 'THO-ALI-002',
+    supplierId: 'prov-001',
     barcode: '780000000008',
     category: 'Alimentos',
     product: 'Huevos Extra caja 180 un',
@@ -554,6 +570,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-ALI-003',
     sku: 'THO-ALI-003',
+    supplierId: 'prov-003',
     barcode: '780000000009',
     category: 'Alimentos',
     product: 'Cafe sobre caja 20 un',
@@ -574,6 +591,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-COM-001',
     sku: 'THO-COM-001',
+    supplierId: 'prov-003',
     barcode: '780000000010',
     category: 'Combustible',
     product: 'Carbon bolsa 2.5 kg',
@@ -594,6 +612,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-COM-002',
     sku: 'THO-COM-002',
+    supplierId: 'prov-003',
     barcode: '780000000011',
     category: 'Combustible',
     product: 'Lena saco pino',
@@ -614,6 +633,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-COM-003',
     sku: 'THO-COM-003',
+    supplierId: 'prov-005',
     barcode: '780000000012',
     category: 'Combustible',
     product: 'Pellet saco 15 kg',
@@ -634,6 +654,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-LIM-001',
     sku: 'THO-LIM-001',
+    supplierId: 'prov-003',
     barcode: '780000000013',
     category: 'Limpieza',
     product: 'Lavalozas 750 ml',
@@ -654,6 +675,7 @@ export const ERP_PRODUCTS_FULL = [
   {
     id: 'THO-OTR-001',
     sku: 'THO-OTR-001',
+    supplierId: 'prov-003',
     barcode: '780000000014',
     category: 'Otros',
     product: 'Bidon combustible 25 L',

@@ -61,7 +61,8 @@ export function normalizeProduct(raw = {}, index = 0) {
   }
 
   return {
-    id: normalizeText(raw.id) || createId(`prod-${index}`),
+    id: normalizeText(raw.sku ?? raw.id) || createId(`prod-${index}`),
+    sku: normalizeText(raw.sku ?? raw.id),
     name,
     category: normalizeText(raw.category ?? raw.categoria ?? 'General') || 'General',
     stock: normalizeInt(raw.stock ?? raw.quantity ?? raw.cantidad, 0),

@@ -4,7 +4,6 @@ import {
   APP_SUBTITLE,
   DEFAULT_SELLER,
   CHECKLIST_ITEMS,
-  LOGIN_CREDENTIALS,
   PRODUCTS,
   logo,
 } from './data/appData';
@@ -23,21 +22,24 @@ import {
 } from './data/erpModulesSeed';
 import ProductsView from './components/ProductsView';
 import ERPView from './components/ERPView';
-import {
-  buildProductOptionLabel,
-  formatCurrency as formatProductCurrency,
-  getActiveOffer,
-  getCurrentPrice,
-  mergeProductList,
-  normalizeProducts,
-  updateProductOffer,
-} from './lib/catalog';
+import { normalizeProducts } from './lib/catalog';
 import SalesWorkspace from './components/SalesView';
 import { readJSON, readString, removeItem, writeJSON, writeString } from './lib/storage';
+import { authService } from './services/auth.service';
+import { useAuth } from './hooks/useAuth';
+import { clientsService } from './services/clients.service';
+import { productsService } from './services/products.service';
+import { ordersService } from './services/orders.service';
+import { purchasesService } from './services/purchases.service';
+import { salesService } from './services/sales.service';
+import { suppliersService } from './services/suppliers.service';
+import { routesService } from './services/routes.service';
+import { volumeScalesService } from './services/volume-scales.service';
+import { cityRatesService } from './services/city-rates.service';
+import { cobranzasService } from './services/cobranzas.service';
 
 const STORAGE_KEYS = {
   themeMode: 'thorena.theme-mode',
-  auth: 'thorena.authenticated',
   orders: 'thorena.orders',
   activeView: 'thorena.active-view',
   products: 'thorena.products',
@@ -52,17 +54,9 @@ const STORAGE_KEYS = {
   erpCityRates: 'thorena.erp-city-rates',
 };
 
-const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pagado', 'Pendiente', 'Anulado'];
+const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pendiente de pago', 'Pagado', 'Anulado'];
 const FINAL_ORDER_STATUSES = new Set(['Pagado', 'Anulado', 'Terminado']);
 const ORDER_DETAIL_EXPAND_THRESHOLD = 4;
-
-const EMPTY_FORM = {
-  customerName: '',
-  customerRut: '',
-  customerNumber: '',
-  deliveryAddress: '',
-  observations: '',
-};
 
 const currencyFormatter = new Intl.NumberFormat('es-CL', {
   style: 'currency',
@@ -86,10 +80,6 @@ function getResolvedTheme(themeMode) {
 
 function getInitialThemeMode() {
   return readString(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.themeMode, 'system');
-}
-
-function getInitialAuth() {
-  return readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.auth, 'false') === 'true';
 }
 
 function normalizeActiveView(view) {
@@ -213,7 +203,7 @@ function normalizeItems(items) {
 function normalizeOrder(order) {
   const rawStatus = String(order?.status || '').trim();
   const mappedStatus = rawStatus === 'Terminado' ? 'Pagado' : rawStatus;
-  const status = ERP_ORDER_STATUSES.includes(mappedStatus) ? mappedStatus : 'Pendiente';
+  const status = ERP_ORDER_STATUSES.includes(mappedStatus) ? mappedStatus : 'Pedido';
   const items = normalizeItems(order?.items);
   const customerContact = String(order?.customerNumber || order?.contactPhone || '');
   const subtotalBeforeDiscount = items.reduce((sum, item) => sum + (item.subtotalBeforeScale || item.subtotal), 0);
@@ -267,74 +257,60 @@ function normalizeOrder(order) {
   };
 }
 
+function buildSalesFromOrder(order, productsFull = []) {
+  const productCostByKey = new Map();
+  productsFull.forEach((product) => {
+    const cost = Math.max(0, Number(product.finalCost ?? product.purchaseCost) || 0);
+    [product.id, product.sku, product.product, product.name].filter(Boolean).forEach((key) => {
+      productCostByKey.set(String(key), cost);
+    });
+  });
+
+  return (order.items || []).map((item, index) => {
+    const saleValue = Math.max(0, Number(item.subtotal) || 0);
+    const unitCost = productCostByKey.get(String(item.productId)) ?? productCostByKey.get(String(item.productName)) ?? 0;
+    const cost = Math.max(0, unitCost * (Number(item.quantity) || 0));
+    const profit = Math.max(0, saleValue - cost);
+
+    return {
+      id: `ven-${order.code}-${index}`,
+      date: String(order.createdAt || new Date().toISOString()).slice(0, 10),
+      client: order.customerName || order.clientSnapshot?.name || '',
+      zone: order.clientSnapshot?.zone || order.dispatchCity || 'Sin zona',
+      sector: order.clientSnapshot?.sector || 'Sin sector',
+      seller: order.sellerName || DEFAULT_SELLER.name,
+      orderCode: order.code,
+      product: item.productName,
+      sale: saleValue,
+      cost,
+      profit,
+      marginPct: saleValue > 0 ? profit / saleValue : 0,
+      paymentMethod: order.paymentMethod || '',
+      dispatchStatus: order.status || 'Pagado',
+    };
+  });
+}
+
 function loadOrders() {
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.orders, []);
-  return Array.isArray(stored) ? stored.map(normalizeOrder) : [];
+  return [];
 }
 
 function loadProducts() {
-  const fallback = ERP_PRODUCTS.length ? ERP_PRODUCTS : PRODUCTS;
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.products, fallback);
-  return normalizeProducts(Array.isArray(stored) ? stored : fallback);
+  return [];
 }
 
 function loadClients() {
-  const fallback = ERP_CLIENTS;
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.clients, fallback);
-  const source = Array.isArray(stored) ? stored : fallback;
-
-  return source.map((client) => ({
-    ...client,
-    contact: client.contact || '',
-    whatsapp: client.whatsapp || client.phone || '',
-    instagram: client.instagram || '',
-    monthlyTarget: Math.max(0, Number(client.monthlyTarget) || 0),
-    accumulatedSales: Math.max(0, Number(client.accumulatedSales) || 0),
-    goalProgress: Math.max(0, Number(client.goalProgress) || 0),
-    creditLimit: Math.max(0, Number(client.creditLimit) || 0),
-    sector: client.sector || '',
-    zone: client.zone || '',
-    frequency: client.frequency || 'Semanal',
-    notes: client.notes || client.observations || '',
-    status: client.status || 'Activo',
-    lastPurchase: normalizeDateValue(client.lastPurchase || ERP_CLIENT_LAST_PURCHASE[client.id] || ''),
-  }));
+  return [];
 }
 
 function loadCobranzas() {
-  const fallback = ERP_COBRANZAS;
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.cobranzas, fallback);
-  const source = Array.isArray(stored) ? stored : fallback;
-
-  return source.map((item, index) => normalizeCobranza(item, index)).filter((item) => item.clientName);
+  return [];
 }
 
 function loadErpModule(storageKey, fallback) {
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, storageKey, fallback);
-  return Array.isArray(stored) ? stored : fallback;
-}
-
-function createInitialDraft(products) {
-  const availableProduct = products.find((product) => product.stock > 0) || products[0] || null;
-
-  return {
-    productId: availableProduct?.id || '',
-    quantity: 1,
-  };
-}
-
-function formatOrderCode(number) {
-  return `PED-${String(number).padStart(4, '0')}`;
-}
-
-function getNextOrderNumber(orders) {
-  const highest = orders.reduce((max, order) => {
-    const match = /^PED-(\d{4})$/.exec(order.code);
-    const parsed = match ? Number(match[1]) : 0;
-    return Math.max(max, parsed);
-  }, 0);
-
-  return highest + 1;
+  void storageKey;
+  void fallback;
+  return [];
 }
 
 function formatCurrency(value) {
@@ -345,12 +321,12 @@ function formatDateTime(value) {
   return dateTimeFormatter.format(new Date(value));
 }
 
-function getCustomerContact(order) {
-  return order.customerNumber || order.contactPhone || '-';
+function responseArray(response: { success: boolean; data?: unknown }) {
+  return response.success && Array.isArray(response.data) ? response.data : [];
 }
 
-function getProductById(productId, catalog = PRODUCTS) {
-  return catalog.find((product) => product.id === productId) || null;
+function getCustomerContact(order) {
+  return order.customerNumber || order.contactPhone || '-';
 }
 
 function LoginScreen({ onLogin }) {
@@ -358,16 +334,17 @@ function LoginScreen({ onLogin }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
-    if (username.trim() === LOGIN_CREDENTIALS.username && password === LOGIN_CREDENTIALS.password) {
+    const logged = await onLogin(username.trim(), password);
+
+    if (logged) {
       setError('');
-      onLogin();
       return;
     }
 
-    setError('Credenciales inválidas. Usa usuario1 / boceto.');
+    setError('Credenciales invalidas. Revisa usuario y contrasena.');
   };
 
   return (
@@ -391,7 +368,7 @@ function LoginScreen({ onLogin }) {
               autoComplete="username"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="usuario1"
+              placeholder="usuario"
             />
           </label>
 
@@ -402,7 +379,7 @@ function LoginScreen({ onLogin }) {
               autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="boceto"
+              placeholder="contrasena"
             />
           </label>
 
@@ -423,9 +400,40 @@ function LoginScreen({ onLogin }) {
 
 function Header({ activeView, onChangeView, onLogout, resolvedTheme, onToggleTheme }) {
   const themeLabel = resolvedTheme === 'light' ? 'Tema claro' : 'Tema oscuro';
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [activeView]);
+
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth >= 768) {
+        setMobileMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const handleNavSelect = (view) => {
+    onChangeView(view);
+    setMobileMenuOpen(false);
+  };
+
+  const handleThemeToggle = () => {
+    onToggleTheme();
+    setMobileMenuOpen(false);
+  };
+
+  const handleLogoutClick = () => {
+    setMobileMenuOpen(false);
+    onLogout();
+  };
 
   return (
-    <header className="app-header panel">
+    <header className={`app-header panel ${mobileMenuOpen ? 'menu-open' : ''}`}>
       <div className="brand-block">
         <div className="brand-mark brand-mark-small">
           <img src={logo} alt="Logo de Thorena Comercial" />
@@ -436,349 +444,83 @@ function Header({ activeView, onChangeView, onLogout, resolvedTheme, onToggleThe
         </div>
       </div>
 
-      <nav className="app-nav" aria-label="Secciones principales">
-        <button
-          type="button"
-          className={activeView === 'ventas' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('ventas')}
-          aria-current={activeView === 'ventas' ? 'page' : undefined}
-        >
-          Ventas
-        </button>
-        <button
-          type="button"
-          className={activeView === 'pedidos' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('pedidos')}
-          aria-current={activeView === 'pedidos' ? 'page' : undefined}
-        >
-          Pedidos
-        </button>
-        <button
-          type="button"
-          className={activeView === 'inventario' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('inventario')}
-          aria-current={activeView === 'inventario' ? 'page' : undefined}
-        >
-          Inventario
-        </button>
-        <button
-          type="button"
-          className={activeView === 'clientes' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('clientes')}
-          aria-current={activeView === 'clientes' ? 'page' : undefined}
-        >
-          Clientes
-        </button>
-        <button
-          type="button"
-          className={activeView === 'erp' ? 'nav-button is-active' : 'nav-button'}
-          onClick={() => onChangeView('erp')}
-          aria-current={activeView === 'erp' ? 'page' : undefined}
-        >
-          ERP
-        </button>
-      </nav>
+      <button
+        type="button"
+        className="mobile-menu-toggle"
+        onClick={() => setMobileMenuOpen((current) => !current)}
+        aria-label={mobileMenuOpen ? 'Cerrar menu' : 'Abrir menu'}
+        aria-expanded={mobileMenuOpen}
+        aria-controls="mobile-main-nav"
+      >
+        <span aria-hidden="true">{mobileMenuOpen ? '✕' : '☰'}</span>
+      </button>
 
-      <div className="header-actions">
-        <label className="theme-switch">
-          <span className="theme-switch-copy">
-            <strong>{themeLabel}</strong>
-          </span>
-          <input
-            type="checkbox"
-            checked={resolvedTheme === 'light'}
-            onChange={onToggleTheme}
-            aria-label="Cambiar tema"
-          />
-          <span className="theme-switch-track" aria-hidden="true">
-            <span className="theme-switch-thumb" />
-          </span>
-        </label>
+      <div id="mobile-main-nav" className={`mobile-menu-panel ${mobileMenuOpen ? 'is-open' : ''}`}>
+        <nav className="app-nav" aria-label="Secciones principales">
+          <button
+            type="button"
+            className={activeView === 'ventas' ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => handleNavSelect('ventas')}
+            aria-current={activeView === 'ventas' ? 'page' : undefined}
+          >
+            Ventas
+          </button>
+          <button
+            type="button"
+            className={activeView === 'pedidos' ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => handleNavSelect('pedidos')}
+            aria-current={activeView === 'pedidos' ? 'page' : undefined}
+          >
+            Pedidos
+          </button>
+          <button
+            type="button"
+            className={activeView === 'inventario' ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => handleNavSelect('inventario')}
+            aria-current={activeView === 'inventario' ? 'page' : undefined}
+          >
+            Inventario
+          </button>
+          <button
+            type="button"
+            className={activeView === 'clientes' ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => handleNavSelect('clientes')}
+            aria-current={activeView === 'clientes' ? 'page' : undefined}
+          >
+            Clientes
+          </button>
+          <button
+            type="button"
+            className={activeView === 'erp' ? 'nav-button is-active' : 'nav-button'}
+            onClick={() => handleNavSelect('erp')}
+            aria-current={activeView === 'erp' ? 'page' : undefined}
+          >
+            ERP
+          </button>
+        </nav>
 
-        <button className="button button-secondary logout-button" type="button" onClick={onLogout}>
-          Cerrar sesión
-        </button>
+        <div className="header-actions">
+          <label className="theme-switch">
+            <span className="theme-switch-copy">
+              <strong>{themeLabel}</strong>
+            </span>
+            <input
+              type="checkbox"
+              checked={resolvedTheme === 'light'}
+              onChange={handleThemeToggle}
+              aria-label="Cambiar tema"
+            />
+            <span className="theme-switch-track" aria-hidden="true">
+              <span className="theme-switch-thumb" />
+            </span>
+          </label>
+
+          <button className="button button-secondary logout-button" type="button" onClick={handleLogoutClick}>
+            Cerrar sesión
+          </button>
+        </div>
       </div>
     </header>
-  );
-}
-
-function SalesView({ orders, setOrders }) {
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [draft, setDraft] = useState(EMPTY_DRAFT);
-  const [items, setItems] = useState([]);
-  const [feedback, setFeedback] = useState(null);
-  const [errors, setErrors] = useState([]);
-
-  const total = useMemo(() => items.reduce((sum, item) => sum + item.subtotal, 0), [items]);
-
-  const handleFieldChange = (key) => (event) => {
-    setForm((current) => ({ ...current, [key]: event.target.value }));
-    setFeedback(null);
-  };
-
-  const handleDraftChange = (key) => (event) => {
-    setDraft((current) => ({ ...current, [key]: event.target.value }));
-    setFeedback(null);
-  };
-
-  const handleAddProduct = (event) => {
-    event.preventDefault();
-    setFeedback(null);
-
-    const quantity = Number(draft.quantity);
-    const product = getProductById(draft.productId);
-
-    if (!product) {
-      return;
-    }
-
-    if (!Number.isInteger(quantity) || quantity < 1) {
-      setErrors(['La cantidad debe ser un número entero mayor que 0.']);
-      return;
-    }
-
-    setErrors([]);
-
-    setItems((current) => {
-      const existing = current.find((item) => item.productId === product.id);
-
-      if (existing) {
-        return current.map((item) =>
-          item.productId === product.id
-            ? {
-                ...item,
-                quantity: item.quantity + quantity,
-                subtotal: (item.quantity + quantity) * item.unitPrice,
-              }
-            : item,
-        );
-      }
-
-      return [
-        ...current,
-        {
-          productId: product.id,
-          productName: product.name,
-          unitPrice: product.price,
-          quantity,
-          subtotal: product.price * quantity,
-        },
-      ];
-    });
-
-    setDraft((current) => ({ ...current, quantity: 1 }));
-  };
-
-  const handleRemoveItem = (productId) => {
-    setItems((current) => current.filter((item) => item.productId !== productId));
-  };
-
-  const handleGenerateOrder = (event) => {
-    event.preventDefault();
-
-    const nextErrors = [];
-    const customerContact = form.customerNumber.trim();
-
-    if (!form.customerName.trim()) nextErrors.push('Ingresa el nombre del cliente o negocio.');
-    if (!form.customerRut.trim()) nextErrors.push('Ingresa el RUT del cliente o negocio.');
-    if (!customerContact) nextErrors.push('Ingresa el número de cliente o teléfono de contacto.');
-    if (!form.deliveryAddress.trim()) nextErrors.push('Ingresa la dirección de despacho.');
-    if (items.length === 0) nextErrors.push('Agrega al menos un producto al pedido.');
-
-    setErrors(nextErrors);
-
-    if (nextErrors.length > 0) {
-      setFeedback(null);
-      return;
-    }
-
-    const code = formatOrderCode(getNextOrderNumber(orders));
-
-    const newOrder = normalizeOrder({
-      code,
-      createdAt: new Date().toISOString(),
-      customerName: form.customerName.trim(),
-      customerRut: form.customerRut.trim(),
-      customerNumber: customerContact,
-      contactPhone: customerContact,
-      deliveryAddress: form.deliveryAddress.trim(),
-      observations: form.observations.trim(),
-      sellerName: DEFAULT_SELLER.name,
-      sellerRut: DEFAULT_SELLER.rut,
-      status: 'Pendiente',
-      items,
-      checklist: {},
-      showReceipt: false,
-    });
-
-    setOrders((current) => [...current, newOrder]);
-
-    setFeedback({ type: 'success', text: `Pedido generado correctamente. Código ${code}.` });
-    setErrors([]);
-    setForm(EMPTY_FORM);
-    setDraft(EMPTY_DRAFT);
-    setItems([]);
-  };
-
-  return (
-    <section className="screen">
-      <div className="screen-heading">
-        <p className="eyebrow">Ventas</p>
-        <h2>Crear pedido en terreno</h2>
-        <p className="muted">
-          Completa los datos, agrega productos y genera el pedido para enviarlo a gestión.
-        </p>
-      </div>
-
-      {feedback ? (
-        <div className={`notice notice-${feedback.type}`} role="status">
-          {feedback.text}
-        </div>
-      ) : null}
-
-      {errors.length > 0 ? (
-        <div className="notice notice-error" role="alert">
-          <ul>
-            {errors.map((error) => (
-              <li key={error}>{error}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      <div className="sales-layout">
-        <form id="sales-form" className="panel sales-panel" onSubmit={handleGenerateOrder}>
-          <div className="panel-title">
-            <h3>Datos del pedido</h3>
-            <p className="muted">Información del cliente para construir el pedido interno.</p>
-          </div>
-
-          <div className="form-grid">
-            <label className="field field-wide">
-              <span>Nombre del cliente o negocio</span>
-              <input value={form.customerName} onChange={handleFieldChange('customerName')} />
-            </label>
-
-            <label className="field">
-              <span>RUT del cliente o negocio</span>
-              <input value={form.customerRut} onChange={handleFieldChange('customerRut')} />
-            </label>
-
-            <label className="field field-wide">
-              <span>Número de cliente / Teléfono o contacto</span>
-              <input value={form.customerNumber} onChange={handleFieldChange('customerNumber')} />
-            </label>
-
-            <label className="field field-wide">
-              <span>Dirección de despacho</span>
-              <input value={form.deliveryAddress} onChange={handleFieldChange('deliveryAddress')} />
-            </label>
-
-            <label className="field field-wide">
-              <span>Observaciones opcionales</span>
-              <textarea
-                rows="3"
-                value={form.observations}
-                onChange={handleFieldChange('observations')}
-              />
-            </label>
-          </div>
-
-          <div className="panel-divider" />
-
-          <div className="panel-title">
-            <h3>Agregar productos</h3>
-            <p className="muted">Selecciona un producto y suma cantidades al pedido.</p>
-          </div>
-
-          <div className="product-builder">
-            <label className="field">
-              <span>Producto</span>
-              <select value={draft.productId} onChange={handleDraftChange('productId')}>
-                {PRODUCTS.map((product) => (
-                  <option key={product.id} value={product.id}>
-                    {product.name} - {formatCurrency(product.price)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field quantity-field">
-              <span>Cantidad</span>
-              <input
-                type="number"
-                min="1"
-                step="1"
-                inputMode="numeric"
-                value={draft.quantity}
-                onChange={handleDraftChange('quantity')}
-              />
-            </label>
-
-            <button className="button button-secondary add-button" type="button" onClick={handleAddProduct}>
-              Agregar producto
-            </button>
-          </div>
-        </form>
-
-        <aside className="panel cart-panel">
-          <div className="panel-title">
-            <h3>Productos agregados</h3>
-            <p className="muted">Revisa, elimina y genera el pedido.</p>
-          </div>
-
-          {items.length === 0 ? (
-            <div className="empty-state empty-state-inline">
-              <p>No hay productos agregados todavía.</p>
-            </div>
-          ) : (
-            <div className="table-wrap">
-              <table className="items-table">
-                <thead>
-                  <tr>
-                    <th>Producto</th>
-                    <th>Cant.</th>
-                    <th>Unitario</th>
-                    <th>Subtotal</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((item) => (
-                    <tr key={item.productId}>
-                      <td>{item.productName}</td>
-                      <td>{item.quantity}</td>
-                      <td>{formatCurrency(item.unitPrice)}</td>
-                      <td>{formatCurrency(item.subtotal)}</td>
-                      <td>
-                        <button
-                          className="icon-button"
-                          type="button"
-                          onClick={() => handleRemoveItem(item.productId)}
-                          aria-label={`Eliminar ${item.productName}`}
-                        >
-                          ×
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <div className="total-box">
-            <span>Total general</span>
-            <strong>{formatCurrency(total)}</strong>
-          </div>
-
-          <button className="button button-primary button-full" type="submit" form="sales-form">
-            Generar pedido
-          </button>
-        </aside>
-      </div>
-    </section>
   );
 }
 
@@ -802,6 +544,10 @@ function OrderCard({ order, onUpdateStatus }) {
   const totalUnits = order.items.reduce((sum, item) => sum + item.quantity, 0);
   const lineDiscountTotal = order.items.reduce((sum, item) => sum + (item.discountAmount || 0), 0);
   const statusLocked = FINAL_ORDER_STATUSES.has(order.status);
+  const isCreditOrder = ['credito 7 dias', 'credito 15 dias'].includes(String(order.paymentMethod || '').trim().toLowerCase());
+  const availableStatuses = isCreditOrder
+    ? ERP_ORDER_STATUSES
+    : ERP_ORDER_STATUSES.filter((status) => status !== 'Pendiente de pago');
 
   return (
     <article className={order.status === 'Pagado' ? 'order-card panel order-card-done' : 'order-card panel'}>
@@ -935,7 +681,7 @@ function OrderCard({ order, onUpdateStatus }) {
         <label className="field status-select-field">
           <span>Estado ERP</span>
           <select value={order.status} onChange={(event) => onUpdateStatus(order.code, event.target.value)} disabled={statusLocked}>
-            {ERP_ORDER_STATUSES.map((status) => (
+            {availableStatuses.map((status) => (
               <option key={status} value={status}>
                 {status}
               </option>
@@ -948,11 +694,29 @@ function OrderCard({ order, onUpdateStatus }) {
   );
 }
 
-function OrdersView({ orders, setOrders }) {
+function OrdersView({ orders, setOrders, sales, setSales, productsFull }) {
+  const [feedback, setFeedback] = useState(null);
   const ordered = [...orders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-  const updateStatus = (code, nextStatus) => {
+  const updateStatus = async (code, nextStatus) => {
     if (!ERP_ORDER_STATUSES.includes(nextStatus)) {
+      return;
+    }
+
+    const currentOrder = orders.find((order) => order.code === code);
+    if (!currentOrder || FINAL_ORDER_STATUSES.has(currentOrder.status)) {
+      return;
+    }
+
+    const isCreditOrder = ['credito 7 dias', 'credito 15 dias'].includes(String(currentOrder.paymentMethod || '').trim().toLowerCase());
+    if (nextStatus === 'Pendiente de pago' && !isCreditOrder) {
+      setFeedback({ type: 'error', text: 'Pendiente de pago solo aplica para credito 7 o 15 dias.' });
+      return;
+    }
+
+    const result = await ordersService.updateStatus(code, nextStatus);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo actualizar el pedido: ${result.error.message}` });
       return;
     }
 
@@ -966,6 +730,17 @@ function OrdersView({ orders, setOrders }) {
           : order,
       ),
     );
+
+    if (nextStatus === 'Pagado') {
+      const paidOrder = { ...currentOrder, status: nextStatus };
+      const saleRows = buildSalesFromOrder(paidOrder, productsFull);
+      setSales((current) => [
+        ...saleRows.filter((row) => !current.some((item) => item.orderCode === row.orderCode && item.product === row.product)),
+        ...current,
+      ]);
+    }
+
+    setFeedback({ type: 'success', text: `Pedido ${code} actualizado a ${nextStatus}.` });
   };
 
   const statusSummary = ERP_ORDER_STATUSES.map((status) => ({
@@ -979,6 +754,8 @@ function OrdersView({ orders, setOrders }) {
         <h2>Pedidos</h2>
         <p className="muted">Estado, cliente y detalle con descuentos por producto.</p>
       </div>
+
+      {feedback ? <div className={`notice notice-${feedback.type}`}>{feedback.text}</div> : null}
 
       {ordered.length === 0 ? (
         <div className="panel empty-orders">
@@ -1115,6 +892,7 @@ function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
   );
 
   const handleDeleteCobranza = (cobranzaId) => {
+    cobranzasService.remove(cobranzaId);
     setCobranzas((current) => current.filter((item) => item.id !== cobranzaId));
   };
 
@@ -1190,13 +968,12 @@ function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
 }
 
 function App() {
+  const { session, loading, refreshSession, clearSession } = useAuth();
+  const [stateHydrated, setStateHydrated] = useState(false);
   const [themeMode, setThemeMode] = useState(() => getInitialThemeMode());
   const [resolvedTheme, setResolvedTheme] = useState(() => getResolvedTheme(getInitialThemeMode()));
-  const [authenticated, setAuthenticated] = useState(() => getInitialAuth());
   const [activeView, setActiveView] = useState(() =>
-    getInitialAuth()
-      ? normalizeActiveView(readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.activeView, 'ventas'))
-      : 'ventas',
+    normalizeActiveView(readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.activeView, 'ventas')),
   );
   const [orders, setOrders] = useState(() => loadOrders());
   const [products, setProducts] = useState(() => loadProducts());
@@ -1211,6 +988,67 @@ function App() {
   const [erpProductsFull, setErpProductsFull] = useState(() => loadErpModule(STORAGE_KEYS.erpProductsFull, ERP_PRODUCTS_FULL));
   const [erpSuppliers, setErpSuppliers] = useState(() => loadErpModule(STORAGE_KEYS.erpSuppliers, ERP_SUPPLIERS));
   const [erpCityRates, setErpCityRates] = useState(() => loadErpModule(STORAGE_KEYS.erpCityRates, ERP_CITY_RATES));
+
+  useEffect(() => {
+    if (!session.authenticated) {
+      setStateHydrated(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const hydrate = async () => {
+      const [
+        ordersRes,
+        productsRes,
+        clientsRes,
+        cobranzasRes,
+        routesRes,
+        scalesRes,
+        purchasesRes,
+        salesRes,
+        productsFullRes,
+        suppliersRes,
+        cityRatesRes,
+      ] = await Promise.all([
+        ordersService.list(),
+        productsService.list(),
+        clientsService.list(),
+        cobranzasService.list(),
+        routesService.list(),
+        volumeScalesService.list(),
+        purchasesService.list(),
+        salesService.list(),
+        productsService.list(),
+        suppliersService.list(),
+        cityRatesService.list(),
+      ]);
+
+      if (cancelled) return;
+
+      const productRows = responseArray(productsRes);
+      const productsFullRows = responseArray(productsFullRes);
+      setOrders(responseArray(ordersRes).map(normalizeOrder));
+      setProducts(normalizeProducts(productRows));
+      setClients(responseArray(clientsRes).map((client) => ({ ...client })));
+      setCobranzas(responseArray(cobranzasRes));
+      setErpRoutes(responseArray(routesRes));
+      setErpScales(responseArray(scalesRes));
+      setErpPurchases(responseArray(purchasesRes));
+      setErpSales(responseArray(salesRes));
+      setErpProductsFull(productsFullRows);
+      setErpSuppliers(responseArray(suppliersRes));
+      setErpCityRates(responseArray(cityRatesRes));
+
+      setStateHydrated(true);
+    };
+
+    hydrate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session.authenticated]);
 
   useLayoutEffect(() => {
     const nextResolvedTheme = getResolvedTheme(themeMode);
@@ -1299,10 +1137,10 @@ function App() {
   }, [erpCityRates]);
 
   useEffect(() => {
-    if (authenticated) {
+    if (session.authenticated) {
       writeString(window.sessionStorage, STORAGE_KEYS.activeView, activeView);
     }
-  }, [activeView, authenticated]);
+  }, [activeView, session.authenticated]);
 
   const handleThemeToggle = () => {
     setThemeMode((currentMode) => {
@@ -1314,26 +1152,76 @@ function App() {
     });
   };
 
-  const handleLogin = () => {
-    writeString(window.sessionStorage, STORAGE_KEYS.auth, 'true');
+  const handleLogin = async (username, password) => {
+    const email = username.trim().toLowerCase() === 'admin' ? 'admin@thorena.cl' : username.includes('@') ? username : `${username}@thorena.local`;
+    let response = await authService.login(email, password);
+
+    if (!response.success) {
+      const signUpResponse = await authService.signUp(username || 'Usuario', email, password);
+      if (!signUpResponse.success) {
+        return false;
+      }
+      response = await authService.login(email, password);
+    }
+
+    if (!response.success) {
+      return false;
+    }
+
     writeString(window.sessionStorage, STORAGE_KEYS.activeView, 'ventas');
-    setAuthenticated(true);
     setActiveView('ventas');
+    await refreshSession();
+    return true;
   };
 
-  const handleLogout = () => {
-    removeItem(window.sessionStorage, STORAGE_KEYS.auth);
+  const handleLogout = async () => {
+    await authService.logout();
     removeItem(window.sessionStorage, STORAGE_KEYS.activeView);
-    setAuthenticated(false);
     setActiveView('ventas');
+    clearSession();
   };
 
   const handleViewChange = (view) => {
     setActiveView(view);
   };
 
-  if (!authenticated) {
+  const inventoryProducts = useMemo(() => {
+    const byId = new Map();
+    products.forEach((item) => {
+      const id = String(item.id || item.sku || '').trim();
+      if (!id) return;
+      byId.set(id, { ...item });
+    });
+
+    erpProductsFull.forEach((item) => {
+      const id = String(item.sku || item.id || '').trim();
+      if (!id) return;
+      const current = byId.get(id);
+      byId.set(id, {
+        id,
+        sku: id,
+        name: item.product || current?.name || id,
+        category: item.category || current?.category || 'General',
+        stock: Math.max(0, Number(item.stock) || Number(current?.stock) || 0),
+        stockMin: Math.max(0, Number(item.stockMin) || Number(current?.stockMin) || 0),
+        basePrice: Math.max(0, Number(item.salePriceBase) || Number(current?.basePrice) || 0),
+        offer: current?.offer || { mode: 'none', discountPercent: 0, endDate: '' },
+      });
+    });
+
+    return [...byId.values()];
+  }, [products, erpProductsFull]);
+
+  if (loading) {
+    return <main className="auth-screen"><section className="auth-card panel"><p>Cargando sesion...</p></section></main>;
+  }
+
+  if (!session.authenticated) {
     return <LoginScreen onLogin={handleLogin} />;
+  }
+
+  if (!stateHydrated) {
+    return <main className="auth-screen"><section className="auth-card panel"><p>Cargando sistema...</p></section></main>;
   }
 
   return (
@@ -1349,21 +1237,26 @@ function App() {
       <main className="app-main">
         {activeView === 'ventas' ? (
           <SalesWorkspace
-            products={products}
+            products={inventoryProducts}
             setProducts={setProducts}
+            productsFull={erpProductsFull}
+            setProductsFull={setErpProductsFull}
             orders={orders}
             setOrders={setOrders}
+            setSales={setErpSales}
             clients={clients}
             paymentMethods={ERP_PAYMENT_METHODS}
             volumeScales={erpScales}
             cityRates={erpCityRates}
           />
         ) : activeView === 'pedidos' ? (
-          <OrdersView orders={orders} setOrders={setOrders} />
+          <OrdersView orders={orders} setOrders={setOrders} sales={erpSales} setSales={setErpSales} productsFull={erpProductsFull} />
         ) : activeView === 'clientes' ? (
           <ClientsView clients={clients} orders={orders} cobranzas={cobranzas} setCobranzas={setCobranzas} />
         ) : activeView === 'erp' ? (
           <ERPView
+            products={products}
+            setProducts={setProducts}
             clients={clients}
             setClients={setClients}
             orders={orders}
@@ -1383,7 +1276,7 @@ function App() {
             setCityRates={setErpCityRates}
           />
         ) : (
-          <ProductsView products={products} setProducts={setProducts} />
+          <ProductsView products={inventoryProducts} setProducts={setProducts} />
         )}
       </main>
     </div>
