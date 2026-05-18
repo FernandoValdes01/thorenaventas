@@ -1,6 +1,14 @@
 import { desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients, cobranzas, orderItems, orders, products, sales } from '../db/schema';
+import { AppError } from '../lib/errors';
+import {
+  normalizePhone,
+  normalizeRut,
+  normalizeText,
+  validatePhone,
+  validateRutDetailed,
+} from '../lib/normalization';
 
 type OrderItemPayload = {
   productId: string;
@@ -209,18 +217,34 @@ export const ordersService = {
         }
       }
 
+      const customerRut = normalizeRut(payload.customerRut || '');
+      const sellerRut = normalizeRut(payload.sellerRut || '');
+      const customerNumber = normalizePhone(payload.customerNumber || payload.contactPhone || '');
+      const contactPhone = normalizePhone(payload.contactPhone || payload.customerNumber || '');
+
+      if (customerRut) {
+        const rutCheck = validateRutDetailed(customerRut);
+        if (!rutCheck.valid) throw new AppError('VALIDATION_ERROR', rutCheck.reason === 'format' ? 'Formato de RUT de cliente invalido.' : 'RUT de cliente invalido: digito verificador incorrecto.', 400);
+      }
+      if (sellerRut) {
+        const rutCheck = validateRutDetailed(sellerRut);
+        if (!rutCheck.valid) throw new AppError('VALIDATION_ERROR', rutCheck.reason === 'format' ? 'Formato de RUT de vendedor invalido.' : 'RUT de vendedor invalido: digito verificador incorrecto.', 400);
+      }
+      if (customerNumber && !validatePhone(customerNumber)) throw new AppError('VALIDATION_ERROR', 'Telefono de cliente invalido.', 400);
+      if (contactPhone && !validatePhone(contactPhone)) throw new AppError('VALIDATION_ERROR', 'Telefono de contacto invalido.', 400);
+
       const insertedOrder = await tx
         .insert(orders)
         .values({
           code,
           clientId,
-          customerName: payload.customerName || clientSnapshot?.name || '',
-          customerRut: payload.customerRut || '',
-          customerNumber: payload.customerNumber || payload.contactPhone || '',
-          contactPhone: payload.contactPhone || payload.customerNumber || '',
-          deliveryAddress: payload.deliveryAddress || '',
-          sellerName: payload.sellerName || '',
-          sellerRut: payload.sellerRut || '',
+          customerName: normalizeText(payload.customerName || clientSnapshot?.name || ''),
+          customerRut,
+          customerNumber,
+          contactPhone,
+          deliveryAddress: normalizeText(payload.deliveryAddress || ''),
+          sellerName: normalizeText(payload.sellerName || ''),
+          sellerRut,
           clientTypeSnapshot: clientSnapshot?.type || '',
           zoneSnapshot: clientSnapshot?.zone || payload.dispatchCity || '',
           sectorSnapshot: clientSnapshot?.sector || '',
@@ -231,11 +255,11 @@ export const ordersService = {
           subtotalBeforeDiscount: String(Math.max(0, Number(payload.subtotalBeforeDiscount) || 0)),
           totalDiscountAmount: String(Math.max(0, Number(payload.totalDiscountAmount) || 0)),
           itemsTotal: String(Math.max(0, Number(payload.itemsTotal) || 0)),
-          dispatchCity: payload.dispatchCity || '',
+          dispatchCity: normalizeText(payload.dispatchCity || ''),
           dispatchRate: String(Math.max(0, Number(payload.dispatchRate) || 0)),
           dispatchSurcharge: String(Math.max(0, Number(payload.dispatchSurcharge) || 0)),
           total: String(Math.max(0, Number(payload.total) || 0)),
-          observations: payload.observations || '',
+          observations: normalizeText(payload.observations || ''),
           showReceipt: Boolean(payload.showReceipt),
           createdAt: payload.createdAt ? new Date(payload.createdAt) : new Date(),
           updatedAt: sql`now()`,

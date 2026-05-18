@@ -1,6 +1,8 @@
 import { desc, eq, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { products, purchases, suppliers } from '../db/schema';
+import { AppError } from '../lib/errors';
+import { normalizeEmail, normalizePhone, normalizeText, normalizeTextKey, validateEmail, validatePhone } from '../lib/normalization';
 import { detailStub } from './base.service';
 
 type CreateProductPayload = {
@@ -107,25 +109,30 @@ export const productsService = {
   createWithInitialPurchase: async (payload: CreateProductPayload) => {
     const created = await db.transaction(async (tx) => {
       let supplierId = payload.supplierId || '';
+      const normalizedCategory = normalizeTextKey(payload.category || 'General') || 'general';
+      const normalizedUnit = normalizeText(payload.unit || 'Unidad') || 'Unidad';
+      const normalizedName = normalizeText(payload.name || '');
 
       if (!supplierId) {
-        const name = String(payload.newSupplier?.name || '').trim();
-        const existingByName = await tx
-          .select({ id: suppliers.id })
-          .from(suppliers)
-          .where(eq(sql`lower(${suppliers.name})`, name.toLowerCase()))
-          .limit(1);
+        const name = normalizeText(payload.newSupplier?.name || '');
+        const phone = normalizePhone(payload.newSupplier?.phone || '');
+        const email = normalizeEmail(payload.newSupplier?.email || '');
+        if (!validatePhone(phone)) throw new AppError('VALIDATION_ERROR', 'Telefono de proveedor invalido. Usa formato chileno +56...', 400);
+        if (!validateEmail(email)) throw new AppError('VALIDATION_ERROR', 'Correo de proveedor invalido.', 400);
+        const existingRow = (await tx.select({ id: suppliers.id, name: suppliers.name }).from(suppliers)).find(
+          (row) => normalizeTextKey(row.name) === normalizeTextKey(name),
+        );
 
-        if (existingByName[0]?.id) {
-          supplierId = existingByName[0].id;
+        if (existingRow?.id) {
+          supplierId = existingRow.id;
         } else {
           const insertedSupplier = await tx
             .insert(suppliers)
             .values({
               name,
-              contact: payload.newSupplier?.contact || '',
-              phone: payload.newSupplier?.phone || '',
-              email: payload.newSupplier?.email || '',
+              contact: normalizeText(payload.newSupplier?.contact || ''),
+              phone,
+              email,
               status: 'Activo',
             })
             .returning({ id: suppliers.id, name: suppliers.name });
@@ -143,17 +150,17 @@ export const productsService = {
         .values({
           sku: payload.sku,
           supplierId,
-          name: payload.name,
-          category: payload.category,
-          barcode: payload.barcode || '',
-          brand: payload.brand || '',
-          unit: payload.unit || 'Unidad',
+          name: normalizedName,
+          category: normalizedCategory,
+          barcode: normalizeText(payload.barcode || ''),
+          brand: normalizeText(payload.brand || ''),
+          unit: normalizedUnit,
           stock: initialQuantity,
           stockMin: Math.max(0, Math.round(Number(payload.stockMin) || 0)),
           purchaseCost: String(Math.max(0, Number(payload.purchaseCost) || initialUnitCost)),
           transportUnit: String(Math.max(0, Number(payload.transportUnit) || initialTransportUnit)),
           finalCost: String(finalCost),
-          location: payload.location || '',
+          location: normalizeText(payload.location || ''),
           basePrice: String(Math.max(0, Number(payload.basePrice) || 0)),
           status: payload.status || 'Activo',
         })
@@ -166,13 +173,13 @@ export const productsService = {
         productId,
         quantity: initialQuantity,
         date: new Date(),
-        purchaseOrder: payload.initialPurchase.purchaseOrder || '',
+          purchaseOrder: normalizeText(payload.initialPurchase.purchaseOrder || ''),
         unitCost: String(initialUnitCost),
         transportUnit: String(initialTransportUnit),
         totalCost: String(initialQuantity * (initialUnitCost + initialTransportUnit)),
         reception: payload.initialPurchase.reception || 'Recibido',
-        doc: payload.initialPurchase.doc || '',
-        observation: payload.initialPurchase.observation || '',
+          doc: normalizeText(payload.initialPurchase.doc || ''),
+          observation: normalizeText(payload.initialPurchase.observation || ''),
       });
 
       return { supplierId, productId, sku: insertedProduct[0].sku, product: insertedProduct[0].name };
@@ -193,19 +200,19 @@ export const productsService = {
     const nextTransportUnit = payload.transportUnit !== undefined ? Math.max(0, Number(payload.transportUnit) || 0) : numberValue(current.transportUnit);
 
     const values: Partial<typeof products.$inferInsert> = { updatedAt: sql`now()` as unknown as Date };
-    if (payload.name !== undefined) values.name = payload.name;
-    if (payload.category !== undefined) values.category = payload.category;
+    if (payload.name !== undefined) values.name = normalizeText(payload.name);
+    if (payload.category !== undefined) values.category = normalizeTextKey(payload.category);
     if (payload.stock !== undefined) values.stock = Math.max(0, Math.round(Number(payload.stock) || 0));
     if (payload.stockMin !== undefined) values.stockMin = Math.max(0, Math.round(Number(payload.stockMin) || 0));
     if (payload.basePrice !== undefined || payload.salePriceBase !== undefined) values.basePrice = String(Math.max(0, Number(payload.basePrice ?? payload.salePriceBase) || 0));
     if (payload.status !== undefined) values.status = payload.status;
-    if (payload.barcode !== undefined) values.barcode = payload.barcode;
-    if (payload.brand !== undefined) values.brand = payload.brand;
-    if (payload.unit !== undefined) values.unit = payload.unit;
+    if (payload.barcode !== undefined) values.barcode = normalizeText(payload.barcode);
+    if (payload.brand !== undefined) values.brand = normalizeText(payload.brand);
+    if (payload.unit !== undefined) values.unit = normalizeText(payload.unit);
     if (payload.purchaseCost !== undefined) values.purchaseCost = String(nextPurchaseCost);
     if (payload.transportUnit !== undefined) values.transportUnit = String(nextTransportUnit);
     if (payload.purchaseCost !== undefined || payload.transportUnit !== undefined) values.finalCost = String(nextPurchaseCost + nextTransportUnit);
-    if (payload.location !== undefined) values.location = payload.location;
+    if (payload.location !== undefined) values.location = normalizeText(payload.location);
     if (payload.supplierId !== undefined) values.supplierId = payload.supplierId || null;
 
     const row = await db.update(products).set(values).where(eq(products.id, current.id)).returning();

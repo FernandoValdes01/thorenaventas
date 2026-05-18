@@ -1,6 +1,17 @@
 import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema';
+import { AppError } from '../lib/errors';
+import {
+  normalizeEmail,
+  normalizePhone,
+  normalizeRut,
+  normalizeText,
+  normalizeTextKey,
+  validateEmail,
+  validatePhone,
+  validateRutDetailed,
+} from '../lib/normalization';
 
 type ClientPayload = {
   code?: string;
@@ -71,20 +82,31 @@ function toClient(row: typeof clients.$inferSelect) {
 }
 
 function clientValues(payload: ClientPayload) {
+  const rut = normalizeRut(payload.rut || '');
+  const phone = normalizePhone(payload.phone || '');
+  const whatsapp = normalizePhone(payload.whatsapp || '');
+  const email = normalizeEmail(payload.email || '');
+
+  const rutCheck = validateRutDetailed(rut);
+  if (!rutCheck.valid) throw new AppError('VALIDATION_ERROR', rutCheck.reason === 'format' ? 'Formato de RUT invalido. Usa 12345678-5.' : 'RUT invalido. Digito verificador incorrecto.', 400);
+  if (!validatePhone(phone)) throw new AppError('VALIDATION_ERROR', 'Telefono invalido. Usa formato chileno +56...', 400);
+  if (!validatePhone(whatsapp)) throw new AppError('VALIDATION_ERROR', 'WhatsApp invalido. Usa formato chileno +56...', 400);
+  if (!validateEmail(email)) throw new AppError('VALIDATION_ERROR', 'Correo invalido.', 400);
+
   return {
     code: String(payload.code || `CLI-${Date.now().toString().slice(-6)}`),
-    name: String(payload.name || '').trim(),
-    type: String(payload.type || 'Negocio fijo'),
-    rut: payload.rut || '',
-    phone: payload.phone || '',
-    whatsapp: payload.whatsapp || '',
-    contact: payload.contact || '',
-    email: payload.email || '',
-    instagram: payload.instagram || '',
-    address: payload.address || '',
-    zone: payload.zone || '',
-    sector: payload.sector || '',
-    frequency: payload.frequency || 'Semanal',
+    name: normalizeText(payload.name || ''),
+    type: normalizeText(payload.type || 'Negocio fijo'),
+    rut,
+    phone,
+    whatsapp,
+    contact: normalizeText(payload.contact || ''),
+    email,
+    instagram: normalizeText(payload.instagram || ''),
+    address: normalizeText(payload.address || ''),
+    zone: normalizeText(payload.zone || ''),
+    sector: normalizeText(payload.sector || ''),
+    frequency: normalizeText(payload.frequency || 'Semanal'),
     creditEnabled: Boolean(payload.creditEnabled),
     debt: String(Math.max(0, Number(payload.debt) || 0)),
     monthlyTarget: String(Math.max(0, Number(payload.monthlyTarget) || 0)),
@@ -92,27 +114,44 @@ function clientValues(payload: ClientPayload) {
     goalProgress: String(Math.min(1, Math.max(0, Number(payload.goalProgress) || 0))),
     creditLimit: String(Math.max(0, Number(payload.creditLimit) || 0)),
     status: payload.status || 'Activo',
-    notes: payload.notes || '',
-    observations: payload.observations || payload.notes || '',
+    notes: normalizeText(payload.notes || ''),
+    observations: normalizeText(payload.observations || payload.notes || ''),
     lastPurchase: parseDate(payload.lastPurchase),
   };
 }
 
 function updateValues(payload: ClientPayload) {
   const values: Partial<typeof clients.$inferInsert> = { updatedAt: sql`now()` as unknown as Date };
-  if (payload.code !== undefined) values.code = payload.code;
-  if (payload.name !== undefined) values.name = payload.name;
-  if (payload.type !== undefined) values.type = payload.type;
-  if (payload.rut !== undefined) values.rut = payload.rut;
-  if (payload.phone !== undefined) values.phone = payload.phone;
-  if (payload.whatsapp !== undefined) values.whatsapp = payload.whatsapp;
-  if (payload.contact !== undefined) values.contact = payload.contact;
-  if (payload.email !== undefined) values.email = payload.email;
-  if (payload.instagram !== undefined) values.instagram = payload.instagram;
-  if (payload.address !== undefined) values.address = payload.address;
-  if (payload.zone !== undefined) values.zone = payload.zone;
-  if (payload.sector !== undefined) values.sector = payload.sector;
-  if (payload.frequency !== undefined) values.frequency = payload.frequency;
+  if (payload.code !== undefined) values.code = normalizeText(payload.code);
+  if (payload.name !== undefined) values.name = normalizeText(payload.name);
+  if (payload.type !== undefined) values.type = normalizeText(payload.type);
+  if (payload.rut !== undefined) {
+    const rut = normalizeRut(payload.rut);
+    const rutCheck = validateRutDetailed(rut);
+    if (!rutCheck.valid) throw new AppError('VALIDATION_ERROR', rutCheck.reason === 'format' ? 'Formato de RUT invalido. Usa 12345678-5.' : 'RUT invalido. Digito verificador incorrecto.', 400);
+    values.rut = rut;
+  }
+  if (payload.phone !== undefined) {
+    const phone = normalizePhone(payload.phone);
+    if (!validatePhone(phone)) throw new AppError('VALIDATION_ERROR', 'Telefono invalido. Usa formato chileno +56...', 400);
+    values.phone = phone;
+  }
+  if (payload.whatsapp !== undefined) {
+    const whatsapp = normalizePhone(payload.whatsapp);
+    if (!validatePhone(whatsapp)) throw new AppError('VALIDATION_ERROR', 'WhatsApp invalido. Usa formato chileno +56...', 400);
+    values.whatsapp = whatsapp;
+  }
+  if (payload.contact !== undefined) values.contact = normalizeText(payload.contact);
+  if (payload.email !== undefined) {
+    const email = normalizeEmail(payload.email);
+    if (!validateEmail(email)) throw new AppError('VALIDATION_ERROR', 'Correo invalido.', 400);
+    values.email = email;
+  }
+  if (payload.instagram !== undefined) values.instagram = normalizeText(payload.instagram);
+  if (payload.address !== undefined) values.address = normalizeText(payload.address);
+  if (payload.zone !== undefined) values.zone = normalizeText(payload.zone);
+  if (payload.sector !== undefined) values.sector = normalizeText(payload.sector);
+  if (payload.frequency !== undefined) values.frequency = normalizeText(payload.frequency);
   if (payload.creditEnabled !== undefined) values.creditEnabled = payload.creditEnabled;
   if (payload.debt !== undefined) values.debt = String(Math.max(0, Number(payload.debt) || 0));
   if (payload.monthlyTarget !== undefined) values.monthlyTarget = String(Math.max(0, Number(payload.monthlyTarget) || 0));
@@ -120,8 +159,8 @@ function updateValues(payload: ClientPayload) {
   if (payload.goalProgress !== undefined) values.goalProgress = String(Math.min(1, Math.max(0, Number(payload.goalProgress) || 0)));
   if (payload.creditLimit !== undefined) values.creditLimit = String(Math.max(0, Number(payload.creditLimit) || 0));
   if (payload.status !== undefined) values.status = payload.status;
-  if (payload.notes !== undefined) values.notes = payload.notes;
-  if (payload.observations !== undefined) values.observations = payload.observations;
+  if (payload.notes !== undefined) values.notes = normalizeText(payload.notes);
+  if (payload.observations !== undefined) values.observations = normalizeText(payload.observations);
   if (payload.lastPurchase !== undefined) values.lastPurchase = parseDate(payload.lastPurchase);
   return values;
 }
@@ -138,11 +177,25 @@ export const clientsService = {
   },
 
   async create(payload: ClientPayload) {
+    const rut = normalizeRut(payload.rut || '');
+    if (rut) {
+      const rows = await db.select({ id: clients.id, rut: clients.rut }).from(clients);
+      const duplicated = rows.find((row) => normalizeTextKey(row.rut) === normalizeTextKey(rut));
+      if (duplicated) throw new AppError('DUPLICATE_RUT', 'Ya existe un cliente con ese RUT.', 409);
+    }
     const row = await db.insert(clients).values(clientValues(payload)).returning();
     return toClient(row[0]);
   },
 
   async update(id: string, payload: ClientPayload) {
+    if (payload.rut !== undefined) {
+      const nextRut = normalizeRut(payload.rut || '');
+      if (nextRut) {
+        const rows = await db.select({ id: clients.id, rut: clients.rut }).from(clients);
+        const duplicated = rows.find((row) => row.id !== id && normalizeTextKey(row.rut) === normalizeTextKey(nextRut));
+        if (duplicated) throw new AppError('DUPLICATE_RUT', 'Ya existe un cliente con ese RUT.', 409);
+      }
+    }
     const row = await db.update(clients).set(updateValues(payload)).where(eq(clients.id, id)).returning();
     return row[0] ? toClient(row[0]) : null;
   },

@@ -1,6 +1,7 @@
 import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { products, purchases, suppliers } from '../db/schema';
+import { normalizeText, normalizeTextKey } from '../lib/normalization';
 
 type PurchasePayload = {
   supplierId?: string;
@@ -136,18 +137,16 @@ export const purchasesService = {
 
       if (!supplierId) {
         const supplierName = String(payload.supplierName || '').trim();
-        const existingSupplier = await tx
-          .select({ id: suppliers.id })
-          .from(suppliers)
-          .where(eq(sql`lower(${suppliers.name})`, supplierName.toLowerCase()))
-          .limit(1);
+        const normalizedName = normalizeText(supplierName);
+        const supplierRows = await tx.select({ id: suppliers.id, name: suppliers.name }).from(suppliers);
+        const existingSupplier = supplierRows.find((row) => normalizeTextKey(row.name) === normalizeTextKey(normalizedName));
 
-        if (existingSupplier[0]?.id) {
-          supplierId = existingSupplier[0].id;
+        if (existingSupplier?.id) {
+          supplierId = existingSupplier.id;
         } else {
           const inserted = await tx
             .insert(suppliers)
-            .values({ name: supplierName, status: 'Activo' })
+            .values({ name: normalizedName, status: 'Activo' })
             .returning({ id: suppliers.id });
           supplierId = inserted[0].id;
         }
@@ -179,14 +178,14 @@ export const purchasesService = {
             supplierId,
             productId: product.id,
             date: payload.date ? new Date(payload.date) : new Date(),
-            purchaseOrder: payload.purchaseOrder || '',
+            purchaseOrder: normalizeText(payload.purchaseOrder || ''),
             quantity,
             unitCost: String(unitCost),
             transportUnit: String(transportUnit),
             totalCost: String(quantity * (unitCost + transportUnit)),
             reception: payload.reception || 'Recibido',
-            doc: payload.doc || '',
-            observation: payload.observation || '',
+            doc: normalizeText(payload.doc || ''),
+            observation: normalizeText(payload.observation || ''),
           })
           .returning({ id: purchases.id, productId: purchases.productId, quantity: purchases.quantity });
 
@@ -214,7 +213,7 @@ export const purchasesService = {
       const values: Partial<typeof purchases.$inferInsert> = { updatedAt: sql`now()` as unknown as Date };
       if (payload.supplierId !== undefined) values.supplierId = payload.supplierId;
       if (payload.date !== undefined) values.date = new Date(payload.date);
-      if (payload.purchaseOrder !== undefined) values.purchaseOrder = payload.purchaseOrder;
+      if (payload.purchaseOrder !== undefined) values.purchaseOrder = normalizeText(payload.purchaseOrder);
       if (payload.quantity !== undefined) values.quantity = quantity;
       if (payload.unitCost !== undefined) values.unitCost = String(unitCost);
       if (payload.transportUnit !== undefined) values.transportUnit = String(transportUnit);
@@ -222,8 +221,8 @@ export const purchasesService = {
         values.totalCost = String(quantity * (unitCost + transportUnit));
       }
       if (payload.reception !== undefined) values.reception = payload.reception;
-      if (payload.doc !== undefined) values.doc = payload.doc;
-      if (payload.observation !== undefined) values.observation = payload.observation;
+      if (payload.doc !== undefined) values.doc = normalizeText(payload.doc);
+      if (payload.observation !== undefined) values.observation = normalizeText(payload.observation);
 
       const updated = await tx.update(purchases).set(values).where(eq(purchases.id, id)).returning();
 

@@ -7,6 +7,16 @@ import { productsService } from '../services/products.service';
 import { purchasesService } from '../services/purchases.service';
 import { suppliersService } from '../services/suppliers.service';
 import { cityRatesService } from '../services/city-rates.service';
+import {
+  normalizeEmail,
+  normalizePhone,
+  normalizeRut,
+  normalizeText,
+  normalizeTextKey,
+  validateEmail,
+  validatePhone,
+  validateRutDetailed,
+} from '../lib/normalization';
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -301,6 +311,8 @@ function ERPView({
   const [productForm, setProductForm] = useState(emptyProductForm);
   const [saleForm, setSaleForm] = useState(emptySaleForm);
   const [cityRateForm, setCityRateForm] = useState(emptyCityRateForm);
+  const [editModal, setEditModal] = useState(null);
+  const [editError, setEditError] = useState('');
 
   const currentMonth = useMemo(() => new Date().toISOString().slice(0, 7), []);
 
@@ -478,9 +490,38 @@ function ERPView({
   const handleAddClient = async (event) => {
     event.preventDefault();
 
-    const name = clientForm.name.trim();
+    const name = normalizeText(clientForm.name);
     if (!name) {
       setFeedback({ type: 'error', text: 'Debes ingresar el nombre del cliente.' });
+      return;
+    }
+
+    const rut = normalizeRut(clientForm.rut);
+    const phone = normalizePhone(clientForm.phone);
+    const whatsapp = normalizePhone(clientForm.whatsapp);
+    const email = normalizeEmail(clientForm.email);
+
+    const rutCheck = validateRutDetailed(rut);
+    if (!rutCheck.valid) {
+      setFeedback({ type: 'error', text: rutCheck.reason === 'format' ? 'Formato de RUT invalido. Usa 12345678-5.' : 'RUT invalido: digito verificador incorrecto.' });
+      return;
+    }
+    if (!validatePhone(phone)) {
+      setFeedback({ type: 'error', text: 'Telefono invalido. Usa formato +56912345678.' });
+      return;
+    }
+    if (!validatePhone(whatsapp)) {
+      setFeedback({ type: 'error', text: 'WhatsApp invalido. Usa formato +56912345678.' });
+      return;
+    }
+    if (!validateEmail(email)) {
+      setFeedback({ type: 'error', text: 'Correo invalido. Ejemplo: nombre@dominio.cl' });
+      return;
+    }
+
+    const duplicatedRut = rut && clients.some((item) => normalizeTextKey(item.rut) === normalizeTextKey(rut));
+    if (duplicatedRut) {
+      setFeedback({ type: 'error', text: 'Ya existe un cliente con ese RUT.' });
       return;
     }
 
@@ -490,14 +531,14 @@ function ERPView({
       id: clientId,
       code: clientId,
       name,
-      type: clientForm.type,
-      rut: clientForm.rut.trim(),
-      phone: clientForm.phone.trim(),
-      contact: clientForm.contact.trim(),
-      email: clientForm.email.trim(),
-      address: clientForm.address.trim(),
-      sector: clientForm.sector.trim(),
-      zone: clientForm.zone.trim(),
+      type: normalizeText(clientForm.type),
+      rut,
+      phone,
+      contact: normalizeText(clientForm.contact),
+      email,
+      address: normalizeText(clientForm.address),
+      sector: normalizeText(clientForm.sector),
+      zone: normalizeText(clientForm.zone),
       frequency: clientForm.frequency,
       creditEnabled: clientForm.creditEnabled === 'true',
       debt: 0,
@@ -506,10 +547,10 @@ function ERPView({
       goalProgress: clamp(asNumber(clientForm.goalProgress, 0), 0, 1),
       creditLimit: Math.max(0, Math.round(asNumber(clientForm.creditLimit, 0))),
       status: clientForm.status,
-      notes: clientForm.notes.trim(),
-      observations: clientForm.notes.trim(),
-      whatsapp: clientForm.whatsapp.trim(),
-      instagram: clientForm.instagram.trim(),
+      notes: normalizeText(clientForm.notes),
+      observations: normalizeText(clientForm.notes),
+      whatsapp,
+      instagram: normalizeText(clientForm.instagram),
       lastPurchase: '',
     };
 
@@ -743,8 +784,8 @@ function ERPView({
   const handleAddProduct = async (event) => {
     event.preventDefault();
 
-    const productName = productForm.product.trim();
-    const sku = productForm.sku.trim();
+    const productName = normalizeText(productForm.product);
+    const sku = normalizeText(productForm.sku);
     if (!productName || !sku) {
       setFeedback({ type: 'error', text: 'Debes completar SKU y nombre de producto.' });
       return;
@@ -762,15 +803,13 @@ function ERPView({
     let supplierName = suppliersById.get(selectedSupplierId)?.name || '';
 
     if (shouldCreateSupplier) {
-      const newSupplierName = productForm.newSupplierName.trim();
+      const newSupplierName = normalizeText(productForm.newSupplierName);
       if (!newSupplierName) {
         setFeedback({ type: 'error', text: 'Debes ingresar el nombre del nuevo proveedor.' });
         return;
       }
 
-      const duplicatedSupplier = suppliers.find(
-        (item) => String(item.name || '').trim().toLowerCase() === newSupplierName.toLowerCase(),
-      );
+      const duplicatedSupplier = suppliers.find((item) => normalizeTextKey(item.name) === normalizeTextKey(newSupplierName));
       if (duplicatedSupplier) {
         supplierId = String(duplicatedSupplier.id);
         supplierName = duplicatedSupplier.name;
@@ -782,6 +821,17 @@ function ERPView({
 
     if (!supplierId) {
       setFeedback({ type: 'error', text: 'Debes seleccionar un proveedor o crear uno nuevo.' });
+      return;
+    }
+
+    const newSupplierPhone = normalizePhone(productForm.newSupplierPhone);
+    const newSupplierEmail = normalizeEmail(productForm.newSupplierEmail);
+    if (!validatePhone(newSupplierPhone)) {
+      setFeedback({ type: 'error', text: 'Telefono de proveedor invalido. Usa formato +56912345678.' });
+      return;
+    }
+    if (!validateEmail(newSupplierEmail)) {
+      setFeedback({ type: 'error', text: 'Correo de proveedor invalido. Ejemplo: contacto@proveedor.cl' });
       return;
     }
 
@@ -809,40 +859,40 @@ function ERPView({
     const backendPayload = {
       sku,
       name: productName,
-      category: productForm.category.trim() || 'General',
-      unit: productForm.unit,
+      category: normalizeTextKey(productForm.category) || 'general',
+      unit: normalizeText(productForm.unit) || 'Unidad',
       basePrice: salePriceBase,
       stockMin: Math.max(0, Math.round(asNumber(productForm.stockMin, 0))),
       status: productForm.status,
       supplierId: shouldCreateSupplier ? undefined : supplierIdForBackend,
       newSupplier: shouldCreateSupplier
         ? {
-            name: supplierName,
-            contact: productForm.newSupplierContact.trim(),
-            phone: productForm.newSupplierPhone.trim(),
-            email: productForm.newSupplierEmail.trim(),
+            name: normalizeText(supplierName),
+            contact: normalizeText(productForm.newSupplierContact),
+            phone: newSupplierPhone,
+            email: newSupplierEmail,
           }
         : !supplierIdForBackend
           ? {
-              name: supplierName,
-              contact: fallbackSupplier?.contact || '',
-              phone: fallbackSupplier?.phone || '',
-              email: fallbackSupplier?.email || '',
+              name: normalizeText(supplierName),
+              contact: normalizeText(fallbackSupplier?.contact || ''),
+              phone: normalizePhone(fallbackSupplier?.phone || ''),
+              email: normalizeEmail(fallbackSupplier?.email || ''),
             }
           : undefined,
-      barcode: productForm.barcode.trim(),
-      brand: productForm.brand.trim(),
+      barcode: normalizeText(productForm.barcode),
+      brand: normalizeText(productForm.brand),
       purchaseCost,
       transportUnit,
-      location: productForm.location.trim(),
+      location: normalizeText(productForm.location),
       initialPurchase: {
         quantity: initialPurchaseQuantity,
         unitCost: purchaseCost,
         transportUnit,
-        purchaseOrder: productForm.initialPurchaseOrder.trim(),
-        doc: productForm.initialPurchaseDoc.trim(),
+        purchaseOrder: normalizeText(productForm.initialPurchaseOrder),
+        doc: normalizeText(productForm.initialPurchaseDoc),
         reception: productForm.initialPurchaseReception,
-        observation: productForm.initialPurchaseObservation.trim(),
+        observation: normalizeText(productForm.initialPurchaseObservation),
       },
     };
 
@@ -858,9 +908,9 @@ function ERPView({
       const newSupplier = {
         id: persistedSupplierId,
         name: supplierName,
-        contact: productForm.newSupplierContact.trim(),
-        phone: productForm.newSupplierPhone.trim(),
-        email: productForm.newSupplierEmail.trim(),
+        contact: normalizeText(productForm.newSupplierContact),
+        phone: newSupplierPhone,
+        email: newSupplierEmail,
         status: 'Activo',
         notes: '',
       };
@@ -870,13 +920,13 @@ function ERPView({
     const newProduct = {
       id: sku,
       sku,
-      barcode: productForm.barcode.trim(),
-      category: productForm.category.trim() || 'General',
+      barcode: normalizeText(productForm.barcode),
+      category: normalizeTextKey(productForm.category) || 'general',
       product: productName,
-      brand: productForm.brand.trim(),
+      brand: normalizeText(productForm.brand),
       supplierId: persistedSupplierId,
       supplier: supplierName,
-      unit: productForm.unit,
+      unit: normalizeText(productForm.unit) || 'Unidad',
       purchaseCost,
       transportUnit,
       finalCost,
@@ -886,7 +936,7 @@ function ERPView({
       stockMin: Math.max(0, Math.round(asNumber(productForm.stockMin, 0))),
       marginPct,
       unitProfit,
-      location: productForm.location.trim(),
+      location: normalizeText(productForm.location),
       status: productForm.status,
     };
 
@@ -897,7 +947,7 @@ function ERPView({
       date: todayISO(),
       supplierId: persistedSupplierId,
       supplier: supplierName,
-      purchaseOrder: productForm.initialPurchaseOrder.trim(),
+      purchaseOrder: normalizeText(productForm.initialPurchaseOrder),
       productSku: sku,
       sku,
       product: productName,
@@ -906,8 +956,8 @@ function ERPView({
       transportUnit: initialPurchaseTransportUnit,
       totalCost: initialPurchaseQuantity * (initialPurchaseUnitCost + initialPurchaseTransportUnit),
       reception: productForm.initialPurchaseReception,
-      doc: productForm.initialPurchaseDoc.trim(),
-      observation: productForm.initialPurchaseObservation.trim(),
+      doc: normalizeText(productForm.initialPurchaseDoc),
+      observation: normalizeText(productForm.initialPurchaseObservation),
     };
 
     setProductsFull((current) => [newProduct, ...current]);
@@ -978,6 +1028,39 @@ function ERPView({
   };
 
   const handleClientInlineChange = (id, key, value) => {
+    if (key === 'rut') {
+      const rut = normalizeRut(value);
+      const rutCheck = validateRutDetailed(rut);
+      if (!rutCheck.valid) {
+        setFeedback({ type: 'error', text: rutCheck.reason === 'format' ? 'Formato de RUT invalido. Usa 12345678-5.' : 'RUT invalido: digito verificador incorrecto.' });
+        return;
+      }
+      const duplicatedRut = rut && clients.some((item) => item.id !== id && normalizeTextKey(item.rut) === normalizeTextKey(rut));
+      if (duplicatedRut) {
+        setFeedback({ type: 'error', text: 'Ya existe un cliente con ese RUT.' });
+        return;
+      }
+      value = rut;
+    }
+
+    if (key === 'phone' || key === 'whatsapp') {
+      const phone = normalizePhone(value);
+      if (!validatePhone(phone)) {
+        setFeedback({ type: 'error', text: 'Telefono invalido. Usa formato +56912345678.' });
+        return;
+      }
+      value = phone;
+    }
+
+    if (key === 'email') {
+      const email = normalizeEmail(value);
+      if (!validateEmail(email)) {
+        setFeedback({ type: 'error', text: 'Correo invalido. Ejemplo: nombre@dominio.cl' });
+        return;
+      }
+      value = email;
+    }
+
     const backendValue = ['debt', 'monthlyTarget', 'accumulatedSales', 'creditLimit'].includes(key)
       ? Math.max(0, Math.round(asNumber(value, 0)))
       : key === 'goalProgress'
@@ -1114,6 +1197,24 @@ function ERPView({
   };
 
   const handleSupplierInlineChange = (id, key, value) => {
+    if (key === 'phone') {
+      const phone = normalizePhone(value);
+      if (!validatePhone(phone)) {
+        setFeedback({ type: 'error', text: 'Telefono invalido. Usa formato +56912345678.' });
+        return;
+      }
+      value = phone;
+    }
+
+    if (key === 'email') {
+      const email = normalizeEmail(value);
+      if (!validateEmail(email)) {
+        setFeedback({ type: 'error', text: 'Correo invalido. Ejemplo: contacto@proveedor.cl' });
+        return;
+      }
+      value = email;
+    }
+
     suppliersService.update(id, { [key]: value });
     setSuppliers((current) => current.map((item) => (item.id === id ? { ...item, [key]: value } : item)));
   };
@@ -1210,6 +1311,76 @@ function ERPView({
   const handleDeleteCityRate = (id) => {
     cityRatesService.remove(id);
     setCityRates((current) => current.filter((item) => item.id !== id));
+  };
+
+  const openEditModal = (entity, id, draft) => {
+    setEditError('');
+    setEditModal({ entity, id, draft });
+  };
+  const closeEditModal = () => {
+    setEditError('');
+    setEditModal(null);
+  };
+  const updateEditDraft = (key) => (event) => {
+    const value = event.target.value;
+    setEditError('');
+    setEditModal((current) => (current ? { ...current, draft: { ...current.draft, [key]: value } } : current));
+  };
+
+  const handleSaveEdit = () => {
+    if (!editModal) return;
+    const { entity, id } = editModal;
+    const draft = { ...(editModal.draft || {}) };
+
+    if (entity === 'client') {
+      draft.rut = normalizeRut(draft.rut || '');
+      draft.phone = normalizePhone(draft.phone || '');
+      draft.email = normalizeEmail(draft.email || '');
+      const rutCheck = validateRutDetailed(draft.rut);
+      if (!rutCheck.valid) {
+        setEditError(rutCheck.reason === 'format' ? 'Formato de RUT invalido. Usa 12345678-5.' : 'RUT invalido: digito verificador incorrecto.');
+        return;
+      }
+      if (!validatePhone(draft.phone)) {
+        setEditError('Telefono invalido. Usa formato +56912345678.');
+        return;
+      }
+      if (!validateEmail(draft.email)) {
+        setEditError('Correo invalido. Ejemplo: nombre@dominio.cl');
+        return;
+      }
+      const duplicatedRut = draft.rut && clients.some((item) => item.id !== id && normalizeTextKey(item.rut) === normalizeTextKey(draft.rut));
+      if (duplicatedRut) {
+        setEditError('Ya existe un cliente con ese RUT.');
+        return;
+      }
+    }
+
+    if (entity === 'supplier') {
+      draft.phone = normalizePhone(draft.phone || '');
+      draft.email = normalizeEmail(draft.email || '');
+      if (!validatePhone(draft.phone)) {
+        setEditError('Telefono invalido. Usa formato +56912345678.');
+        return;
+      }
+      if (!validateEmail(draft.email)) {
+        setEditError('Correo invalido. Ejemplo: contacto@proveedor.cl');
+        return;
+      }
+    }
+
+    const entries = Object.entries(draft);
+
+    if (entity === 'client') entries.forEach(([key, value]) => handleClientInlineChange(id, key, value));
+    if (entity === 'route') entries.forEach(([key, value]) => handleRouteInlineChange(id, key, value));
+    if (entity === 'scale') entries.forEach(([key, value]) => handleScaleInlineChange(id, key, value));
+    if (entity === 'purchase') entries.forEach(([key, value]) => handlePurchaseInlineChange(id, key, value));
+    if (entity === 'product') entries.forEach(([key, value]) => handleProductInlineChange(id, key, value));
+    if (entity === 'sale') entries.forEach(([key, value]) => handleSaleInlineChange(id, key, value));
+    if (entity === 'supplier') entries.forEach(([key, value]) => handleSupplierInlineChange(id, key, value));
+    if (entity === 'cityRate') entries.forEach(([key, value]) => handleCityRateInlineChange(id, key, value));
+
+    closeEditModal();
   };
 
   const topProducts = salesByProduct.slice(0, 5);
@@ -1419,7 +1590,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table erp-wide-table">
+              <table className="items-table erp-wide-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>ID</th>
@@ -1434,6 +1605,7 @@ function ERPView({
                     <th>Acumulado</th>
                     <th>Progreso</th>
                     <th>Estado</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1441,30 +1613,29 @@ function ERPView({
                     <tr key={client.id}>
                       <td>{client.id}</td>
                       <td>
-                        <input value={client.name || ''} onChange={(event) => handleClientInlineChange(client.id, 'name', event.target.value)} />
+                        <strong>{client.name || '-'}</strong>
                         <div className="muted">{client.rut || '-'}</div>
                       </td>
-                      <td>
-                        <select value={client.type || CLIENT_TYPES[0]} onChange={(event) => handleClientInlineChange(client.id, 'type', event.target.value)}>
-                          {CLIENT_TYPES.map((type) => (
-                            <option key={type} value={type}>{type}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td><input value={client.zone || ''} onChange={(event) => handleClientInlineChange(client.id, 'zone', event.target.value)} /></td>
-                      <td><input value={client.sector || ''} onChange={(event) => handleClientInlineChange(client.id, 'sector', event.target.value)} /></td>
-                      <td><input value={client.contact || ''} onChange={(event) => handleClientInlineChange(client.id, 'contact', event.target.value)} /></td>
-                      <td><input value={client.phone || ''} onChange={(event) => handleClientInlineChange(client.id, 'phone', event.target.value)} /></td>
-                      <td><input type="number" min="0" step="1" value={client.debt ?? 0} onChange={(event) => handleClientInlineChange(client.id, 'debt', event.target.value)} /></td>
-                      <td><input type="number" min="0" step="1" value={client.monthlyTarget ?? 0} onChange={(event) => handleClientInlineChange(client.id, 'monthlyTarget', event.target.value)} /></td>
-                      <td><input type="number" min="0" step="1" value={client.accumulatedSales ?? 0} onChange={(event) => handleClientInlineChange(client.id, 'accumulatedSales', event.target.value)} /></td>
-                      <td><input type="number" min="0" max="1" step="0.01" value={client.goalProgress ?? 0} onChange={(event) => handleClientInlineChange(client.id, 'goalProgress', event.target.value)} /></td>
-                      <td>
-                        <select value={client.status || 'Activo'} onChange={(event) => handleClientInlineChange(client.id, 'status', event.target.value)}>
-                          {CLIENT_STATUSES.map((status) => (
-                            <option key={status} value={status}>{status}</option>
-                          ))}
-                        </select>
+                      <td>{client.type || '-'}</td>
+                      <td>{client.zone || '-'}</td>
+                      <td>{client.sector || '-'}</td>
+                      <td>{client.contact || '-'}</td>
+                      <td>{client.phone || '-'}</td>
+                      <td>{formatCurrency(client.debt || 0)}</td>
+                      <td>{formatCurrency(client.monthlyTarget || 0)}</td>
+                      <td>{formatCurrency(client.accumulatedSales || 0)}</td>
+                      <td>{formatPercent(client.goalProgress || 0)}</td>
+                      <td>{client.status || 'Activo'}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('client', client.id, {
+                            name: client.name || '', type: client.type || CLIENT_TYPES[0], status: client.status || 'Activo', rut: client.rut || '',
+                            zone: client.zone || '', sector: client.sector || '', contact: client.contact || '', phone: client.phone || '', email: client.email || '', debt: String(client.debt ?? 0),
+                            monthlyTarget: String(client.monthlyTarget ?? 0), accumulatedSales: String(client.accumulatedSales ?? 0), goalProgress: String(client.goalProgress ?? 0),
+                          })}>
+                            Editar
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1544,7 +1715,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table">
+              <table className="items-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>Fecha</th>
@@ -1557,27 +1728,33 @@ function ERPView({
                     <th>Ventas</th>
                     <th>Km</th>
                     <th>Combustible</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {routes.map((route) => (
                     <tr key={route.id}>
-                      <td><input type="date" value={route.date || ''} onChange={(event) => handleRouteInlineChange(route.id, 'date', event.target.value)} /></td>
-                      <td><input value={route.zone || ''} onChange={(event) => handleRouteInlineChange(route.id, 'zone', event.target.value)} /></td>
-                      <td><input value={route.sector || ''} onChange={(event) => handleRouteInlineChange(route.id, 'sector', event.target.value)} /></td>
-                      <td>
-                        <select value={route.seller || ROUTE_SELLERS[0]} onChange={(event) => handleRouteInlineChange(route.id, 'seller', event.target.value)}>
-                          {ROUTE_SELLERS.map((seller) => (
-                            <option key={seller} value={seller}>{seller}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td><input type="number" min="0" step="1" value={route.visitedClients ?? 0} onChange={(event) => handleRouteInlineChange(route.id, 'visitedClients', event.target.value)} /></td>
-                      <td><input type="number" min="0" step="1" value={route.clientsWithOrder ?? 0} onChange={(event) => handleRouteInlineChange(route.id, 'clientsWithOrder', event.target.value)} /></td>
+                      <td>{route.date || '-'}</td>
+                      <td>{route.zone || '-'}</td>
+                      <td>{route.sector || '-'}</td>
+                      <td>{route.seller || '-'}</td>
+                      <td>{formatInteger(route.visitedClients || 0)}</td>
+                      <td>{formatInteger(route.clientsWithOrder || 0)}</td>
                       <td>{formatPercent(route.effectivenessPct || 0)}</td>
-                      <td><input type="number" min="0" step="1" value={route.sales ?? 0} onChange={(event) => handleRouteInlineChange(route.id, 'sales', event.target.value)} /></td>
-                      <td><input type="number" min="0" step="1" value={route.kmRoute ?? 0} onChange={(event) => handleRouteInlineChange(route.id, 'kmRoute', event.target.value)} /></td>
-                      <td><input type="number" min="0" step="1" value={route.fuel ?? 0} onChange={(event) => handleRouteInlineChange(route.id, 'fuel', event.target.value)} /></td>
+                      <td>{formatCurrency(route.sales || 0)}</td>
+                      <td>{formatInteger(route.kmRoute || 0)}</td>
+                      <td>{formatCurrency(route.fuel || 0)}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('route', route.id, {
+                            date: route.date || '', zone: route.zone || '', sector: route.sector || '', seller: route.seller || ROUTE_SELLERS[0],
+                            visitedClients: String(route.visitedClients ?? 0), clientsWithOrder: String(route.clientsWithOrder ?? 0), sales: String(route.sales ?? 0),
+                            kmRoute: String(route.kmRoute ?? 0), fuel: String(route.fuel ?? 0), observation: route.observation || '',
+                          })}>
+                            Editar
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1634,7 +1811,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table">
+              <table className="items-table erp-table-min-900">
                 <thead>
                   <tr>
                     <th>Escala</th>
@@ -1643,56 +1820,30 @@ function ERPView({
                     <th>Desc.</th>
                     <th>Objetivo</th>
                     <th>Comentario</th>
-                    <th />
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {scales.map((scale) => (
                     <tr key={scale.id}>
-                      <td>
-                        <input value={scale.label || ''} onChange={(event) => handleScaleInlineChange(scale.id, 'label', event.target.value)} />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="1"
-                          step="1"
-                          value={scale.minQuantity ?? 1}
-                          onChange={(event) => handleScaleInlineChange(scale.id, 'minQuantity', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="1"
-                          step="1"
-                          value={scale.maxQuantity ?? 1}
-                          onChange={(event) => handleScaleInlineChange(scale.id, 'maxQuantity', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          max="0.95"
-                          step="0.01"
-                          value={scale.discountRate ?? 0}
-                          onChange={(event) => handleScaleInlineChange(scale.id, 'discountRate', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          value={scale.objective || ''}
-                          onChange={(event) => handleScaleInlineChange(scale.id, 'objective', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input value={scale.comment || ''} onChange={(event) => handleScaleInlineChange(scale.id, 'comment', event.target.value)} />
-                      </td>
-                      <td>
-                        <button className="icon-button" type="button" onClick={() => handleDeleteScale(scale.id)} aria-label={`Eliminar escala ${scale.label || scale.id}`}>
-                          x
-                        </button>
+                      <td>{scale.label || '-'}</td>
+                      <td>{formatInteger(scale.minQuantity || 0)}</td>
+                      <td>{formatInteger(scale.maxQuantity || 0)}</td>
+                      <td>{formatPercent(scale.discountRate || 0)}</td>
+                      <td>{scale.objective || '-'}</td>
+                      <td>{scale.comment || '-'}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('scale', scale.id, {
+                            label: scale.label || '', minQuantity: String(scale.minQuantity ?? 1), maxQuantity: String(scale.maxQuantity ?? 1),
+                            discountRate: String(scale.discountRate ?? 0), objective: scale.objective || '', comment: scale.comment || '',
+                          })}>
+                            Editar
+                          </button>
+                          <button className="button button-small button-danger" type="button" onClick={() => handleDeleteScale(scale.id)} aria-label={`Eliminar escala ${scale.label || scale.id}`}>
+                            Eliminar
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1795,7 +1946,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table erp-wide-table">
+              <table className="items-table erp-wide-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>Fecha</th>
@@ -1809,35 +1960,34 @@ function ERPView({
                     <th>Costo total</th>
                     <th>Recepcion</th>
                     <th>Doc</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {purchases.map((purchase) => (
                     <tr key={purchase.id}>
-                      <td><input type="date" value={purchase.date || ''} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'date', event.target.value)} /></td>
-                      <td>
-                        <select value={purchase.supplierId || ''} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'supplierId', event.target.value)}>
-                          <option value="">Selecciona proveedor</option>
-                          {suppliers.map((supplier) => (
-                            <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td><input value={purchase.purchaseOrder || ''} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'purchaseOrder', event.target.value)} /></td>
+                      <td>{purchase.date || '-'}</td>
+                      <td>{purchase.supplier || '-'}</td>
+                      <td>{purchase.purchaseOrder || '-'}</td>
                       <td>{purchase.sku || '-'}</td>
                       <td>{purchase.product || '-'}</td>
-                      <td><input type="number" min="1" step="1" value={purchase.quantity ?? 1} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'quantity', event.target.value)} /></td>
-                      <td><input type="number" min="0" step="1" value={purchase.unitCost ?? 0} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'unitCost', event.target.value)} /></td>
-                      <td><input type="number" min="0" step="1" value={purchase.transportUnit ?? 0} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'transportUnit', event.target.value)} /></td>
+                      <td>{formatInteger(purchase.quantity || 0)}</td>
+                      <td>{formatCurrency(purchase.unitCost || 0)}</td>
+                      <td>{formatCurrency(purchase.transportUnit || 0)}</td>
                       <td>{formatCurrency(purchase.totalCost || 0)}</td>
-                      <td>
-                        <select value={purchase.reception || 'Recibido'} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'reception', event.target.value)}>
-                          {RECEPTION_STATUSES.map((status) => (
-                            <option key={status} value={status}>{status}</option>
-                          ))}
-                        </select>
+                      <td>{purchase.reception || 'Recibido'}</td>
+                      <td>{purchase.doc || '-'}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('purchase', purchase.id, {
+                            date: purchase.date || '', supplierId: purchase.supplierId || '', purchaseOrder: purchase.purchaseOrder || '', quantity: String(purchase.quantity ?? 1),
+                            unitCost: String(purchase.unitCost ?? 0), transportUnit: String(purchase.transportUnit ?? 0), reception: purchase.reception || 'Recibido', doc: purchase.doc || '',
+                            observation: purchase.observation || '',
+                          })}>
+                            Editar
+                          </button>
+                        </div>
                       </td>
-                      <td><input value={purchase.doc || ''} onChange={(event) => handlePurchaseInlineChange(purchase.id, 'doc', event.target.value)} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -2012,7 +2162,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table erp-wide-table">
+              <table className="items-table erp-wide-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>SKU</th>
@@ -2025,6 +2175,7 @@ function ERPView({
                     <th>Utilidad</th>
                     <th>Margen</th>
                     <th>Estado</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2036,44 +2187,22 @@ function ERPView({
                         <div className="muted">{product.brand || '-'}</div>
                       </td>
                       <td>{product.category || '-'}</td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={product.stock ?? 0}
-                          onChange={(event) => handleProductInlineChange(product.sku, 'stock', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={product.stockMin ?? 0}
-                          onChange={(event) => handleProductInlineChange(product.sku, 'stockMin', event.target.value)}
-                        />
-                      </td>
+                      <td>{formatInteger(product.stock || 0)}</td>
+                      <td>{formatInteger(product.stockMin || 0)}</td>
                       <td>{formatCurrency(product.finalCost || 0)}</td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={product.salePriceBase ?? 0}
-                          onChange={(event) => handleProductInlineChange(product.sku, 'salePriceBase', event.target.value)}
-                        />
-                      </td>
+                      <td>{formatCurrency(product.salePriceBase || 0)}</td>
                       <td>{formatCurrency(product.unitProfit || 0)}</td>
                       <td>{formatPercent(product.marginPct || 0)}</td>
-                      <td>
-                        <select value={product.status || 'Activo'} onChange={(event) => handleProductInlineChange(product.sku, 'status', event.target.value)}>
-                          {PRODUCT_STATUSES.map((status) => (
-                            <option key={status} value={status}>
-                              {status}
-                            </option>
-                          ))}
-                        </select>
+                      <td>{product.status || 'Activo'}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('product', product.sku, {
+                            stock: String(product.stock ?? 0), stockMin: String(product.stockMin ?? 0), salePriceBase: String(product.salePriceBase ?? 0),
+                            status: product.status || 'Activo',
+                          })}>
+                            Editar
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -2169,7 +2298,7 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table erp-wide-table">
+              <table className="items-table erp-wide-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>Fecha</th>
@@ -2183,33 +2312,33 @@ function ERPView({
                     <th>Margen</th>
                     <th>Pago</th>
                     <th>Despacho</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sales.map((row) => (
                     <tr key={row.id}>
-                      <td><input type="date" value={row.date || ''} onChange={(event) => handleSaleInlineChange(row.id, 'date', event.target.value)} /></td>
-                      <td><input value={row.client || ''} onChange={(event) => handleSaleInlineChange(row.id, 'client', event.target.value)} /></td>
-                      <td><input value={row.zone || ''} onChange={(event) => handleSaleInlineChange(row.id, 'zone', event.target.value)} /></td>
-                      <td><input value={row.orderCode || ''} onChange={(event) => handleSaleInlineChange(row.id, 'orderCode', event.target.value)} /></td>
-                      <td><input value={row.product || ''} onChange={(event) => handleSaleInlineChange(row.id, 'product', event.target.value)} /></td>
-                      <td><input type="number" min="0" step="1" value={row.sale ?? 0} onChange={(event) => handleSaleInlineChange(row.id, 'sale', event.target.value)} /></td>
-                      <td><input type="number" min="0" step="1" value={row.cost ?? 0} onChange={(event) => handleSaleInlineChange(row.id, 'cost', event.target.value)} /></td>
+                      <td>{row.date || '-'}</td>
+                      <td>{row.client || '-'}</td>
+                      <td>{row.zone || '-'}</td>
+                      <td>{row.orderCode || '-'}</td>
+                      <td>{row.product || '-'}</td>
+                      <td>{formatCurrency(row.sale || 0)}</td>
+                      <td>{formatCurrency(row.cost || 0)}</td>
                       <td>{formatCurrency(row.profit || 0)}</td>
                       <td>{formatPercent(row.marginPct || 0)}</td>
-                      <td>
-                        <select value={row.paymentMethod || PAYMENT_METHODS[0]} onChange={(event) => handleSaleInlineChange(row.id, 'paymentMethod', event.target.value)}>
-                          {PAYMENT_METHODS.map((method) => (
-                            <option key={method} value={method}>{method}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td>
-                        <select value={row.dispatchStatus || DISPATCH_STATUSES[0]} onChange={(event) => handleSaleInlineChange(row.id, 'dispatchStatus', event.target.value)}>
-                          {DISPATCH_STATUSES.map((status) => (
-                            <option key={status} value={status}>{status}</option>
-                          ))}
-                        </select>
+                      <td>{row.paymentMethod || PAYMENT_METHODS[0]}</td>
+                      <td>{row.dispatchStatus || DISPATCH_STATUSES[0]}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('sale', row.id, {
+                            date: row.date || '', client: row.client || '', zone: row.zone || '', orderCode: row.orderCode || '', product: row.product || '',
+                            sale: String(row.sale ?? 0), cost: String(row.cost ?? 0), paymentMethod: row.paymentMethod || PAYMENT_METHODS[0],
+                            dispatchStatus: row.dispatchStatus || DISPATCH_STATUSES[0],
+                          })}>
+                            Editar
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -2231,7 +2360,7 @@ function ERPView({
             <p className="muted">Los proveedores nuevos se crean desde Productos al registrar producto con compra inicial.</p>
 
             <div className="table-wrap">
-              <table className="items-table erp-wide-table suppliers-table">
+              <table className="items-table erp-wide-table suppliers-table erp-table-min-1100">
                 <thead>
                   <tr>
                     <th>Proveedor</th>
@@ -2242,29 +2371,34 @@ function ERPView({
                     <th>Productos</th>
                     <th>Compras</th>
                     <th>Notas</th>
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {suppliersWithRelations.map((supplier) => (
                     <tr key={supplier.id}>
-                      <td><input value={supplier.name || ''} onChange={(event) => handleSupplierInlineChange(supplier.id, 'name', event.target.value)} /></td>
-                      <td><input value={supplier.contact || ''} onChange={(event) => handleSupplierInlineChange(supplier.id, 'contact', event.target.value)} /></td>
-                      <td><input value={supplier.phone || ''} onChange={(event) => handleSupplierInlineChange(supplier.id, 'phone', event.target.value)} /></td>
-                      <td><input value={supplier.email || ''} onChange={(event) => handleSupplierInlineChange(supplier.id, 'email', event.target.value)} /></td>
-                      <td>
-                        <select value={supplier.status || 'Activo'} onChange={(event) => handleSupplierInlineChange(supplier.id, 'status', event.target.value)}>
-                          {SUPPLIER_STATUSES.map((status) => (
-                            <option key={status} value={status}>{status}</option>
-                          ))}
-                        </select>
-                      </td>
+                      <td>{supplier.name || '-'}</td>
+                      <td>{supplier.contact || '-'}</td>
+                      <td>{supplier.phone || '-'}</td>
+                      <td>{supplier.email || '-'}</td>
+                      <td>{supplier.status || 'Activo'}</td>
                       <td>
                         {supplier.productsCount > 0
                           ? `${supplier.productsCount} (${supplier.productNames.slice(0, 2).join(', ')}${supplier.productsCount > 2 ? ', ...' : ''})`
                           : '0'}
                       </td>
                       <td>{supplier.purchasesCount}</td>
-                      <td><input value={supplier.notes || ''} onChange={(event) => handleSupplierInlineChange(supplier.id, 'notes', event.target.value)} /></td>
+                      <td>{supplier.notes || '-'}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('supplier', supplier.id, {
+                            name: supplier.name || '', contact: supplier.contact || '', phone: supplier.phone || '', email: supplier.email || '',
+                            status: supplier.status || 'Activo', notes: supplier.notes || '',
+                          })}>
+                            Editar
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -2305,39 +2439,158 @@ function ERPView({
             </div>
 
             <div className="table-wrap">
-              <table className="items-table">
+              <table className="items-table erp-table-min-900">
                 <thead>
                   <tr>
                     <th>Ciudad</th>
                     <th>Tarifa</th>
-                    <th />
+                    <th className="table-actions-col">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {cityRates.map((row) => (
                     <tr key={row.id}>
-                      <td>
-                        <input value={row.city || ''} onChange={(event) => handleCityRateInlineChange(row.id, 'city', event.target.value)} />
-                      </td>
-                      <td>
-                        <input
-                          type="number"
-                          min="0"
-                          max="95"
-                          step="0.1"
-                          value={Math.round((row.rate ?? 0) * 1000) / 10}
-                          onChange={(event) => handleCityRateInlineChange(row.id, 'rate', event.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <button className="icon-button" type="button" onClick={() => handleDeleteCityRate(row.id)} aria-label={`Eliminar tarifa ${row.city || row.id}`}>
-                          x
-                        </button>
+                      <td>{row.city || '-'}</td>
+                      <td>{formatPercent(row.rate || 0)}</td>
+                      <td className="table-actions-col">
+                        <div className="table-actions">
+                          <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('cityRate', row.id, {
+                            city: row.city || '', rate: String(Math.round((row.rate ?? 0) * 1000) / 10),
+                          })}>
+                            Editar
+                          </button>
+                          <button className="button button-small button-danger" type="button" onClick={() => handleDeleteCityRate(row.id)} aria-label={`Eliminar tarifa ${row.city || row.id}`}>
+                            Eliminar
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {editModal ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Editar registro ERP">
+          <div className="panel modal-card">
+            <div className="panel-title">
+              <h3>Editar registro</h3>
+              <p className="muted">Actualiza solo el elemento seleccionado.</p>
+            </div>
+
+            {editError ? (
+              <div className="notice notice-error" role="alert">
+                {editError}
+              </div>
+            ) : null}
+
+            <div className="form-grid">
+              {editModal.entity === 'client' ? (
+                <>
+                  <label className="field"><span>Nombre</span><input value={editModal.draft.name || ''} onChange={updateEditDraft('name')} /></label>
+                  <label className="field"><span>Tipo</span><select value={editModal.draft.type || CLIENT_TYPES[0]} onChange={updateEditDraft('type')}>{CLIENT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
+                  <label className="field"><span>Estado</span><select value={editModal.draft.status || 'Activo'} onChange={updateEditDraft('status')}>{CLIENT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+                  <label className="field"><span>RUT (12345678-5)</span><input value={editModal.draft.rut || ''} onChange={updateEditDraft('rut')} placeholder="12345678-5" /></label>
+                  <label className="field"><span>Zona</span><input value={editModal.draft.zone || ''} onChange={updateEditDraft('zone')} /></label>
+                  <label className="field"><span>Sector</span><input value={editModal.draft.sector || ''} onChange={updateEditDraft('sector')} /></label>
+                  <label className="field"><span>Contacto</span><input value={editModal.draft.contact || ''} onChange={updateEditDraft('contact')} /></label>
+                  <label className="field"><span>Telefono (+56912345678)</span><input value={editModal.draft.phone || ''} onChange={updateEditDraft('phone')} placeholder="+56912345678" /></label>
+                  <label className="field"><span>Email (nombre@dominio.cl)</span><input value={editModal.draft.email || ''} onChange={updateEditDraft('email')} placeholder="nombre@dominio.cl" /></label>
+                  <label className="field"><span>Deuda</span><input type="number" min="0" step="1" value={editModal.draft.debt || 0} onChange={updateEditDraft('debt')} /></label>
+                  <label className="field"><span>Meta mensual</span><input type="number" min="0" step="1" value={editModal.draft.monthlyTarget || 0} onChange={updateEditDraft('monthlyTarget')} /></label>
+                  <label className="field"><span>Acumulado</span><input type="number" min="0" step="1" value={editModal.draft.accumulatedSales || 0} onChange={updateEditDraft('accumulatedSales')} /></label>
+                  <label className="field"><span>Progreso</span><input type="number" min="0" max="1" step="0.01" value={editModal.draft.goalProgress || 0} onChange={updateEditDraft('goalProgress')} /></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'route' ? (
+                <>
+                  <label className="field"><span>Fecha</span><input type="date" value={editModal.draft.date || ''} onChange={updateEditDraft('date')} /></label>
+                  <label className="field"><span>Vendedor</span><select value={editModal.draft.seller || ROUTE_SELLERS[0]} onChange={updateEditDraft('seller')}>{ROUTE_SELLERS.map((seller) => <option key={seller} value={seller}>{seller}</option>)}</select></label>
+                  <label className="field"><span>Zona</span><input value={editModal.draft.zone || ''} onChange={updateEditDraft('zone')} /></label>
+                  <label className="field"><span>Sector</span><input value={editModal.draft.sector || ''} onChange={updateEditDraft('sector')} /></label>
+                  <label className="field"><span>Visitados</span><input type="number" min="0" step="1" value={editModal.draft.visitedClients || 0} onChange={updateEditDraft('visitedClients')} /></label>
+                  <label className="field"><span>Con pedido</span><input type="number" min="0" step="1" value={editModal.draft.clientsWithOrder || 0} onChange={updateEditDraft('clientsWithOrder')} /></label>
+                  <label className="field"><span>Ventas</span><input type="number" min="0" step="1" value={editModal.draft.sales || 0} onChange={updateEditDraft('sales')} /></label>
+                  <label className="field"><span>Km</span><input type="number" min="0" step="1" value={editModal.draft.kmRoute || 0} onChange={updateEditDraft('kmRoute')} /></label>
+                  <label className="field"><span>Combustible</span><input type="number" min="0" step="1" value={editModal.draft.fuel || 0} onChange={updateEditDraft('fuel')} /></label>
+                  <label className="field field-wide"><span>Observacion</span><textarea rows="3" value={editModal.draft.observation || ''} onChange={updateEditDraft('observation')} /></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'scale' ? (
+                <>
+                  <label className="field field-wide"><span>Escala</span><input value={editModal.draft.label || ''} onChange={updateEditDraft('label')} /></label>
+                  <label className="field"><span>Min</span><input type="number" min="1" step="1" value={editModal.draft.minQuantity || 1} onChange={updateEditDraft('minQuantity')} /></label>
+                  <label className="field"><span>Max</span><input type="number" min="1" step="1" value={editModal.draft.maxQuantity || 1} onChange={updateEditDraft('maxQuantity')} /></label>
+                  <label className="field"><span>Descuento</span><input type="number" min="0" max="0.95" step="0.01" value={editModal.draft.discountRate || 0} onChange={updateEditDraft('discountRate')} /></label>
+                  <label className="field field-wide"><span>Objetivo</span><input value={editModal.draft.objective || ''} onChange={updateEditDraft('objective')} /></label>
+                  <label className="field field-wide"><span>Comentario</span><textarea rows="3" value={editModal.draft.comment || ''} onChange={updateEditDraft('comment')} /></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'purchase' ? (
+                <>
+                  <label className="field"><span>Fecha</span><input type="date" value={editModal.draft.date || ''} onChange={updateEditDraft('date')} /></label>
+                  <label className="field"><span>Proveedor</span><select value={editModal.draft.supplierId || ''} onChange={updateEditDraft('supplierId')}><option value="">Selecciona proveedor</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></label>
+                  <label className="field"><span>OC</span><input value={editModal.draft.purchaseOrder || ''} onChange={updateEditDraft('purchaseOrder')} /></label>
+                  <label className="field"><span>Cantidad</span><input type="number" min="1" step="1" value={editModal.draft.quantity || 1} onChange={updateEditDraft('quantity')} /></label>
+                  <label className="field"><span>Costo unit.</span><input type="number" min="0" step="1" value={editModal.draft.unitCost || 0} onChange={updateEditDraft('unitCost')} /></label>
+                  <label className="field"><span>Transporte</span><input type="number" min="0" step="1" value={editModal.draft.transportUnit || 0} onChange={updateEditDraft('transportUnit')} /></label>
+                  <label className="field"><span>Recepcion</span><select value={editModal.draft.reception || 'Recibido'} onChange={updateEditDraft('reception')}>{RECEPTION_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+                  <label className="field"><span>Doc</span><input value={editModal.draft.doc || ''} onChange={updateEditDraft('doc')} /></label>
+                  <label className="field field-wide"><span>Observacion</span><textarea rows="3" value={editModal.draft.observation || ''} onChange={updateEditDraft('observation')} /></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'product' ? (
+                <>
+                  <label className="field"><span>Stock</span><input type="number" min="0" step="1" value={editModal.draft.stock || 0} onChange={updateEditDraft('stock')} /></label>
+                  <label className="field"><span>Stock minimo</span><input type="number" min="0" step="1" value={editModal.draft.stockMin || 0} onChange={updateEditDraft('stockMin')} /></label>
+                  <label className="field"><span>Precio base</span><input type="number" min="0" step="1" value={editModal.draft.salePriceBase || 0} onChange={updateEditDraft('salePriceBase')} /></label>
+                  <label className="field"><span>Estado</span><select value={editModal.draft.status || 'Activo'} onChange={updateEditDraft('status')}>{PRODUCT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'sale' ? (
+                <>
+                  <label className="field"><span>Fecha</span><input type="date" value={editModal.draft.date || ''} onChange={updateEditDraft('date')} /></label>
+                  <label className="field"><span>Cliente</span><input value={editModal.draft.client || ''} onChange={updateEditDraft('client')} /></label>
+                  <label className="field"><span>Zona</span><input value={editModal.draft.zone || ''} onChange={updateEditDraft('zone')} /></label>
+                  <label className="field"><span>Pedido</span><input value={editModal.draft.orderCode || ''} onChange={updateEditDraft('orderCode')} /></label>
+                  <label className="field field-wide"><span>Producto</span><input value={editModal.draft.product || ''} onChange={updateEditDraft('product')} /></label>
+                  <label className="field"><span>Venta</span><input type="number" min="0" step="1" value={editModal.draft.sale || 0} onChange={updateEditDraft('sale')} /></label>
+                  <label className="field"><span>Costo</span><input type="number" min="0" step="1" value={editModal.draft.cost || 0} onChange={updateEditDraft('cost')} /></label>
+                  <label className="field"><span>Pago</span><select value={editModal.draft.paymentMethod || PAYMENT_METHODS[0]} onChange={updateEditDraft('paymentMethod')}>{PAYMENT_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}</select></label>
+                  <label className="field"><span>Despacho</span><select value={editModal.draft.dispatchStatus || DISPATCH_STATUSES[0]} onChange={updateEditDraft('dispatchStatus')}>{DISPATCH_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'supplier' ? (
+                <>
+                  <label className="field"><span>Proveedor</span><input value={editModal.draft.name || ''} onChange={updateEditDraft('name')} /></label>
+                  <label className="field"><span>Contacto</span><input value={editModal.draft.contact || ''} onChange={updateEditDraft('contact')} /></label>
+                  <label className="field"><span>Telefono (+56912345678)</span><input value={editModal.draft.phone || ''} onChange={updateEditDraft('phone')} placeholder="+56912345678" /></label>
+                  <label className="field"><span>Email (contacto@proveedor.cl)</span><input value={editModal.draft.email || ''} onChange={updateEditDraft('email')} placeholder="contacto@proveedor.cl" /></label>
+                  <label className="field"><span>Estado</span><select value={editModal.draft.status || 'Activo'} onChange={updateEditDraft('status')}>{SUPPLIER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+                  <label className="field field-wide"><span>Notas</span><textarea rows="3" value={editModal.draft.notes || ''} onChange={updateEditDraft('notes')} /></label>
+                </>
+              ) : null}
+
+              {editModal.entity === 'cityRate' ? (
+                <>
+                  <label className="field field-wide"><span>Ciudad</span><input value={editModal.draft.city || ''} onChange={updateEditDraft('city')} /></label>
+                  <label className="field"><span>Tarifa (%)</span><input type="number" min="0" max="95" step="0.1" value={editModal.draft.rate || 0} onChange={updateEditDraft('rate')} /></label>
+                </>
+              ) : null}
+            </div>
+
+            <div className="modal-actions">
+              <button className="button button-secondary" type="button" onClick={closeEditModal}>Cancelar</button>
+              <button className="button button-primary" type="button" onClick={handleSaveEdit}>Guardar cambios</button>
             </div>
           </div>
         </div>
