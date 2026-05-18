@@ -123,6 +123,15 @@ npm run db:generate
 npm run db:migrate
 ```
 
+Para limpiar datos operativos conservando usuarios/login:
+
+```bash
+cd backend
+npm run db:clear
+```
+
+Para borrar tambien usuarios/login, usar `npm run db:clear -- --include-auth`.
+
 ## TODOs principales siguientes
 
 1. Migrar frontend completo a TypeScript (`.tsx/.ts`) por fases.

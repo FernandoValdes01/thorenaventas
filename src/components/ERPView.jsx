@@ -1,6 +1,12 @@
 import { useMemo, useState } from 'react';
+import { clientsService } from '../services/clients.service';
+import { routesService } from '../services/routes.service';
+import { volumeScalesService } from '../services/volume-scales.service';
+import { salesService } from '../services/sales.service';
 import { productsService } from '../services/products.service';
 import { purchasesService } from '../services/purchases.service';
+import { suppliersService } from '../services/suppliers.service';
+import { cityRatesService } from '../services/city-rates.service';
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -469,7 +475,7 @@ function ERPView({
     setFeedback(null);
   };
 
-  const handleAddClient = (event) => {
+  const handleAddClient = async (event) => {
     event.preventDefault();
 
     const name = clientForm.name.trim();
@@ -482,6 +488,7 @@ function ERPView({
     const clientId = `CLI-${String(nowId).slice(-6)}`;
     const newClient = {
       id: clientId,
+      code: clientId,
       name,
       type: clientForm.type,
       rut: clientForm.rut.trim(),
@@ -506,12 +513,18 @@ function ERPView({
       lastPurchase: '',
     };
 
-    setClients((current) => [newClient, ...current]);
+    const result = await clientsService.create(newClient);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar cliente en base de datos: ${result.error.message}` });
+      return;
+    }
+
+    setClients((current) => [result.data || newClient, ...current]);
     setClientForm(emptyClientForm);
     setFeedback({ type: 'success', text: 'Cliente agregado al ERP.' });
   };
 
-  const handleAddRoute = (event) => {
+  const handleAddRoute = async (event) => {
     event.preventDefault();
 
     if (!routeForm.zone.trim() || !routeForm.sector.trim()) {
@@ -538,12 +551,18 @@ function ERPView({
       observation: routeForm.observation.trim(),
     };
 
-    setRoutes((current) => [newRoute, ...current]);
+    const result = await routesService.create(newRoute);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar ruta en base de datos: ${result.error.message}` });
+      return;
+    }
+
+    setRoutes((current) => [result.data || newRoute, ...current]);
     setRouteForm(emptyRouteForm);
     setFeedback({ type: 'success', text: 'Ruta agregada correctamente.' });
   };
 
-  const handleAddScale = (event) => {
+  const handleAddScale = async (event) => {
     event.preventDefault();
 
     const label = scaleForm.label.trim();
@@ -566,12 +585,25 @@ function ERPView({
       comment: scaleForm.comment.trim(),
     };
 
-    setScales((current) => [...current, newScale].sort((a, b) => a.minQuantity - b.minQuantity));
+    const result = await volumeScalesService.create(newScale);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar escala en base de datos: ${result.error.message}` });
+      return;
+    }
+
+    setScales((current) => [...current, result.data || newScale].sort((a, b) => a.minQuantity - b.minQuantity));
     setScaleForm(emptyScaleForm);
     setFeedback({ type: 'success', text: 'Escala agregada correctamente.' });
   };
 
   const handleScaleInlineChange = (id, key, value) => {
+    const backendValue = key === 'minQuantity' || key === 'maxQuantity'
+      ? Math.max(1, Math.round(asNumber(value, 1)))
+      : key === 'discountRate'
+        ? clamp(asNumber(value, 0), 0, 0.95)
+        : value;
+    volumeScalesService.update(id, { [key]: backendValue });
+
     setScales((current) =>
       current
         .map((item) => {
@@ -592,6 +624,7 @@ function ERPView({
   };
 
   const handleDeleteScale = (id) => {
+    volumeScalesService.remove(id);
     setScales((current) => current.filter((item) => item.id !== id));
   };
 
@@ -744,16 +777,6 @@ function ERPView({
       } else {
         supplierId = `prov-${Date.now()}`;
         supplierName = newSupplierName;
-        const newSupplier = {
-          id: supplierId,
-          name: newSupplierName,
-          contact: productForm.newSupplierContact.trim(),
-          phone: productForm.newSupplierPhone.trim(),
-          email: productForm.newSupplierEmail.trim(),
-          status: 'Activo',
-          notes: '',
-        };
-        setSuppliers((current) => [newSupplier, ...current]);
       }
     }
 
@@ -784,6 +807,8 @@ function ERPView({
       category: productForm.category.trim() || 'General',
       unit: productForm.unit,
       basePrice: salePriceBase,
+      stockMin: Math.max(0, Math.round(asNumber(productForm.stockMin, 0))),
+      status: productForm.status,
       supplierId: shouldCreateSupplier ? undefined : supplierIdForBackend,
       newSupplier: shouldCreateSupplier
         ? {
@@ -822,6 +847,21 @@ function ERPView({
       return;
     }
 
+    const persistedSupplierId = backendResult.data?.payload?.supplierId || supplierId;
+
+    if (shouldCreateSupplier && !suppliers.some((item) => String(item.id) === String(persistedSupplierId))) {
+      const newSupplier = {
+        id: persistedSupplierId,
+        name: supplierName,
+        contact: productForm.newSupplierContact.trim(),
+        phone: productForm.newSupplierPhone.trim(),
+        email: productForm.newSupplierEmail.trim(),
+        status: 'Activo',
+        notes: '',
+      };
+      setSuppliers((current) => [newSupplier, ...current]);
+    }
+
     const newProduct = {
       id: sku,
       sku,
@@ -829,7 +869,7 @@ function ERPView({
       category: productForm.category.trim() || 'General',
       product: productName,
       brand: productForm.brand.trim(),
-      supplierId,
+      supplierId: persistedSupplierId,
       supplier: supplierName,
       unit: productForm.unit,
       purchaseCost,
@@ -850,7 +890,7 @@ function ERPView({
     const initialPurchase = {
       id: `comp-${Date.now()}`,
       date: todayISO(),
-      supplierId,
+      supplierId: persistedSupplierId,
       supplier: supplierName,
       purchaseOrder: productForm.initialPurchaseOrder.trim(),
       productSku: sku,
@@ -886,6 +926,11 @@ function ERPView({
   };
 
   const handleProductInlineChange = (sku, key, value) => {
+    const backendValue = key === 'stock' || key === 'stockMin' || key === 'salePriceBase'
+      ? Math.max(0, Math.round(asNumber(value, 0)))
+      : value;
+    productsService.update(sku, { [key]: backendValue });
+
     setProductsFull((current) =>
       current.map((item) => {
         if (item.sku !== sku) return item;
@@ -928,6 +973,15 @@ function ERPView({
   };
 
   const handleClientInlineChange = (id, key, value) => {
+    const backendValue = ['debt', 'monthlyTarget', 'accumulatedSales', 'creditLimit'].includes(key)
+      ? Math.max(0, Math.round(asNumber(value, 0)))
+      : key === 'goalProgress'
+        ? clamp(asNumber(value, 0), 0, 1)
+        : key === 'creditEnabled'
+          ? value === 'true'
+          : value;
+    clientsService.update(id, { [key]: backendValue });
+
     setClients((current) =>
       current.map((item) => {
         if (item.id !== id) return item;
@@ -950,11 +1004,13 @@ function ERPView({
   };
 
   const handleRouteInlineChange = (id, key, value) => {
+    const numericFields = ['visitedClients', 'clientsWithOrder', 'sales', 'kmRoute', 'fuel'];
+    routesService.update(id, { [key]: numericFields.includes(key) ? Math.max(0, Math.round(asNumber(value, 0))) : value });
+
     setRoutes((current) =>
       current.map((item) => {
         if (item.id !== id) return item;
 
-        const numericFields = ['visitedClients', 'clientsWithOrder', 'sales', 'kmRoute', 'fuel'];
         const next = numericFields.includes(key)
           ? { ...item, [key]: Math.max(0, Math.round(asNumber(value, 0))) }
           : { ...item, [key]: value };
@@ -972,6 +1028,11 @@ function ERPView({
   const handlePurchaseInlineChange = (id, key, value) => {
     const currentPurchase = purchases.find((item) => item.id === id);
     if (!currentPurchase) return;
+
+    const backendValue = key === 'quantity' || key === 'unitCost' || key === 'transportUnit'
+      ? Math.max(key === 'quantity' ? 1 : 0, Math.round(asNumber(value, key === 'quantity' ? 1 : 0)))
+      : value;
+    purchasesService.update(id, { [key]: backendValue });
 
     if (key === 'quantity') {
       const previousQuantity = Math.max(0, Math.round(asNumber(currentPurchase.quantity, 0)));
@@ -1028,6 +1089,9 @@ function ERPView({
   };
 
   const handleSaleInlineChange = (id, key, value) => {
+    const backendValue = key === 'sale' || key === 'cost' ? Math.max(0, Math.round(asNumber(value, 0))) : value;
+    salesService.update(id, { [key]: backendValue });
+
     setSales((current) =>
       current.map((item) => {
         if (item.id !== id) return item;
@@ -1045,10 +1109,11 @@ function ERPView({
   };
 
   const handleSupplierInlineChange = (id, key, value) => {
+    suppliersService.update(id, { [key]: value });
     setSuppliers((current) => current.map((item) => (item.id === id ? { ...item, [key]: value } : item)));
   };
 
-  const handleAddSale = (event) => {
+  const handleAddSale = async (event) => {
     event.preventDefault();
 
     if (!saleForm.client.trim() || !saleForm.product.trim()) {
@@ -1078,12 +1143,18 @@ function ERPView({
       dispatchStatus: saleForm.dispatchStatus,
     };
 
-    setSales((current) => [newSale, ...current]);
+    const result = await salesService.create(newSale);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar venta en base de datos: ${result.error.message}` });
+      return;
+    }
+
+    setSales((current) => [result.data || newSale, ...current]);
     setSaleForm(emptySaleForm);
     setFeedback({ type: 'success', text: 'Venta registrada en ERP.' });
   };
 
-  const handleAddCityRate = (event) => {
+  const handleAddCityRate = async (event) => {
     event.preventDefault();
 
     const city = cityRateForm.city.trim();
@@ -1095,14 +1166,21 @@ function ERPView({
     const rate = clamp(asNumber(cityRateForm.rate, 0), 0, 0.95);
     const normalizedKey = city.toLowerCase();
 
+    const result = await cityRatesService.create({ city, rate });
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar tarifa en base de datos: ${result.error.message}` });
+      return;
+    }
+
+    const savedRate = result.data || { id: `city-${Date.now()}`, city, rate };
     setCityRates((current) => {
       const existing = current.find((item) => String(item.city || '').trim().toLowerCase() === normalizedKey);
 
       if (existing) {
-        return current.map((item) => (item.id === existing.id ? { ...item, city, rate } : item));
+        return current.map((item) => (item.id === existing.id ? savedRate : item));
       }
 
-      return [...current, { id: `city-${Date.now()}`, city, rate }];
+      return [...current, savedRate];
     });
 
     setCityRateForm(emptyCityRateForm);
@@ -1110,6 +1188,8 @@ function ERPView({
   };
 
   const handleCityRateInlineChange = (id, key, value) => {
+    cityRatesService.update(id, { [key]: key === 'rate' ? clamp(asNumber(value, 0), 0, 0.95) : value });
+
     setCityRates((current) =>
       current.map((item) => {
         if (item.id !== id) return item;
@@ -1122,6 +1202,7 @@ function ERPView({
   };
 
   const handleDeleteCityRate = (id) => {
+    cityRatesService.remove(id);
     setCityRates((current) => current.filter((item) => item.id !== id));
   };
 
@@ -1924,7 +2005,7 @@ function ERPView({
 
           <div className="panel erp-list-panel">
             <div className="panel-title">
-              <h3>Maestro de productos</h3>
+              <h3>Inventario de productos</h3>
               <p className="muted">Edicion rapida de stock, precio y estado.</p>
             </div>
 
@@ -2138,17 +2219,17 @@ function ERPView({
       ) : null}
 
       {tab === 'proveedores' ? (
-        <div className="erp-content-layout">
+        <div className="erp-content-layout erp-content-layout-full">
           <div className="panel erp-list-panel">
             <div className="panel-title">
-              <h3>Maestro de proveedores</h3>
+              <h3>Proveedores</h3>
               <p className="muted">Consulta de proveedores, sus productos y compras relacionadas.</p>
             </div>
 
             <p className="muted">Los proveedores nuevos se crean desde Productos al registrar producto con compra inicial.</p>
 
             <div className="table-wrap">
-              <table className="items-table">
+              <table className="items-table erp-wide-table suppliers-table">
                 <thead>
                   <tr>
                     <th>Proveedor</th>

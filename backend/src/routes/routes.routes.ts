@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { ok } from '../lib/http';
+import { routesService } from '../services/routes.service';
 
 export const routesRoutes = new Hono()
-  .get('/', (c) => ok(c, { items: [], source: 'stub' }))
-  .get('/:id', (c) => ok(c, { id: c.req.param('id'), source: 'stub' }))
-  .post('/', (c) => ok(c, { created: true }, 201))
-  .patch('/:id', (c) => ok(c, { updated: true, id: c.req.param('id') }));
+  .get('/', async (c) => ok(c, await routesService.list()))
+  .post('/', async (c) => ok(c, await routesService.create(await c.req.json()), 201))
+  .patch('/:id', async (c) => ok(c, await routesService.update(c.req.param('id'), await c.req.json())));

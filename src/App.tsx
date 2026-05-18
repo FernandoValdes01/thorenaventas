@@ -27,7 +27,16 @@ import SalesWorkspace from './components/SalesView';
 import { readJSON, readString, removeItem, writeJSON, writeString } from './lib/storage';
 import { authService } from './services/auth.service';
 import { useAuth } from './hooks/useAuth';
-import { stateService } from './services/state.service';
+import { clientsService } from './services/clients.service';
+import { productsService } from './services/products.service';
+import { ordersService } from './services/orders.service';
+import { purchasesService } from './services/purchases.service';
+import { salesService } from './services/sales.service';
+import { suppliersService } from './services/suppliers.service';
+import { routesService } from './services/routes.service';
+import { volumeScalesService } from './services/volume-scales.service';
+import { cityRatesService } from './services/city-rates.service';
+import { cobranzasService } from './services/cobranzas.service';
 
 const STORAGE_KEYS = {
   themeMode: 'thorena.theme-mode',
@@ -248,6 +257,40 @@ function normalizeOrder(order) {
   };
 }
 
+function buildSalesFromOrder(order, productsFull = []) {
+  const productCostByKey = new Map();
+  productsFull.forEach((product) => {
+    const cost = Math.max(0, Number(product.finalCost ?? product.purchaseCost) || 0);
+    [product.id, product.sku, product.product, product.name].filter(Boolean).forEach((key) => {
+      productCostByKey.set(String(key), cost);
+    });
+  });
+
+  return (order.items || []).map((item, index) => {
+    const saleValue = Math.max(0, Number(item.subtotal) || 0);
+    const unitCost = productCostByKey.get(String(item.productId)) ?? productCostByKey.get(String(item.productName)) ?? 0;
+    const cost = Math.max(0, unitCost * (Number(item.quantity) || 0));
+    const profit = Math.max(0, saleValue - cost);
+
+    return {
+      id: `ven-${order.code}-${index}`,
+      date: String(order.createdAt || new Date().toISOString()).slice(0, 10),
+      client: order.customerName || order.clientSnapshot?.name || '',
+      zone: order.clientSnapshot?.zone || order.dispatchCity || 'Sin zona',
+      sector: order.clientSnapshot?.sector || 'Sin sector',
+      seller: order.sellerName || DEFAULT_SELLER.name,
+      orderCode: order.code,
+      product: item.productName,
+      sale: saleValue,
+      cost,
+      profit,
+      marginPct: saleValue > 0 ? profit / saleValue : 0,
+      paymentMethod: order.paymentMethod || '',
+      dispatchStatus: order.status || 'Pagado',
+    };
+  });
+}
+
 function loadOrders() {
   return [];
 }
@@ -276,6 +319,10 @@ function formatCurrency(value) {
 
 function formatDateTime(value) {
   return dateTimeFormatter.format(new Date(value));
+}
+
+function responseArray(response: { success: boolean; data?: unknown }) {
+  return response.success && Array.isArray(response.data) ? response.data : [];
 }
 
 function getCustomerContact(order) {
@@ -643,11 +690,23 @@ function OrderCard({ order, onUpdateStatus }) {
   );
 }
 
-function OrdersView({ orders, setOrders }) {
+function OrdersView({ orders, setOrders, sales, setSales, productsFull }) {
+  const [feedback, setFeedback] = useState(null);
   const ordered = [...orders].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-  const updateStatus = (code, nextStatus) => {
+  const updateStatus = async (code, nextStatus) => {
     if (!ERP_ORDER_STATUSES.includes(nextStatus)) {
+      return;
+    }
+
+    const currentOrder = orders.find((order) => order.code === code);
+    if (!currentOrder || FINAL_ORDER_STATUSES.has(currentOrder.status)) {
+      return;
+    }
+
+    const result = await ordersService.updateStatus(code, nextStatus);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo actualizar el pedido: ${result.error.message}` });
       return;
     }
 
@@ -661,6 +720,17 @@ function OrdersView({ orders, setOrders }) {
           : order,
       ),
     );
+
+    if (nextStatus === 'Pagado') {
+      const paidOrder = { ...currentOrder, status: nextStatus };
+      const saleRows = buildSalesFromOrder(paidOrder, productsFull);
+      setSales((current) => [
+        ...saleRows.filter((row) => !current.some((item) => item.orderCode === row.orderCode && item.product === row.product)),
+        ...current,
+      ]);
+    }
+
+    setFeedback({ type: 'success', text: `Pedido ${code} actualizado a ${nextStatus}.` });
   };
 
   const statusSummary = ERP_ORDER_STATUSES.map((status) => ({
@@ -674,6 +744,8 @@ function OrdersView({ orders, setOrders }) {
         <h2>Pedidos</h2>
         <p className="muted">Estado, cliente y detalle con descuentos por producto.</p>
       </div>
+
+      {feedback ? <div className={`notice notice-${feedback.type}`}>{feedback.text}</div> : null}
 
       {ordered.length === 0 ? (
         <div className="panel empty-orders">
@@ -810,6 +882,7 @@ function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
   );
 
   const handleDeleteCobranza = (cobranzaId) => {
+    cobranzasService.remove(cobranzaId);
     setCobranzas((current) => current.filter((item) => item.id !== cobranzaId));
   };
 
@@ -928,32 +1001,34 @@ function App() {
         suppliersRes,
         cityRatesRes,
       ] = await Promise.all([
-        stateService.get('orders'),
-        stateService.get('products'),
-        stateService.get('clients'),
-        stateService.get('cobranzas'),
-        stateService.get('erpRoutes'),
-        stateService.get('erpScales'),
-        stateService.get('erpPurchases'),
-        stateService.get('erpSales'),
-        stateService.get('erpProductsFull'),
-        stateService.get('erpSuppliers'),
-        stateService.get('erpCityRates'),
+        ordersService.list(),
+        productsService.list(),
+        clientsService.list(),
+        cobranzasService.list(),
+        routesService.list(),
+        volumeScalesService.list(),
+        purchasesService.list(),
+        salesService.list(),
+        productsService.list(),
+        suppliersService.list(),
+        cityRatesService.list(),
       ]);
 
       if (cancelled) return;
 
-      setOrders(ordersRes.success && Array.isArray(ordersRes.data?.data) ? ordersRes.data.data.map(normalizeOrder) : []);
-      setProducts(productsRes.success && Array.isArray(productsRes.data?.data) ? normalizeProducts(productsRes.data.data) : []);
-      setClients(clientsRes.success && Array.isArray(clientsRes.data?.data) ? clientsRes.data.data.map((client) => ({ ...client })) : []);
-      setCobranzas(cobranzasRes.success && Array.isArray(cobranzasRes.data?.data) ? cobranzasRes.data.data : []);
-      setErpRoutes(routesRes.success && Array.isArray(routesRes.data?.data) ? routesRes.data.data : []);
-      setErpScales(scalesRes.success && Array.isArray(scalesRes.data?.data) ? scalesRes.data.data : []);
-      setErpPurchases(purchasesRes.success && Array.isArray(purchasesRes.data?.data) ? purchasesRes.data.data : []);
-      setErpSales(salesRes.success && Array.isArray(salesRes.data?.data) ? salesRes.data.data : []);
-      setErpProductsFull(productsFullRes.success && Array.isArray(productsFullRes.data?.data) ? productsFullRes.data.data : []);
-      setErpSuppliers(suppliersRes.success && Array.isArray(suppliersRes.data?.data) ? suppliersRes.data.data : []);
-      setErpCityRates(cityRatesRes.success && Array.isArray(cityRatesRes.data?.data) ? cityRatesRes.data.data : []);
+      const productRows = responseArray(productsRes);
+      const productsFullRows = responseArray(productsFullRes);
+      setOrders(responseArray(ordersRes).map(normalizeOrder));
+      setProducts(normalizeProducts(productRows));
+      setClients(responseArray(clientsRes).map((client) => ({ ...client })));
+      setCobranzas(responseArray(cobranzasRes));
+      setErpRoutes(responseArray(routesRes));
+      setErpScales(responseArray(scalesRes));
+      setErpPurchases(responseArray(purchasesRes));
+      setErpSales(responseArray(salesRes));
+      setErpProductsFull(productsFullRows);
+      setErpSuppliers(responseArray(suppliersRes));
+      setErpCityRates(responseArray(cityRatesRes));
 
       setStateHydrated(true);
     };
@@ -1009,80 +1084,47 @@ function App() {
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.orders, orders);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('orders', orders);
-    }
-  }, [orders, session.authenticated, stateHydrated]);
+  }, [orders]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.products, products);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('products', products);
-    }
-  }, [products, session.authenticated, stateHydrated]);
+  }, [products]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.clients, clients);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('clients', clients);
-    }
-  }, [clients, session.authenticated, stateHydrated]);
+  }, [clients]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.cobranzas, cobranzas);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('cobranzas', cobranzas);
-    }
-  }, [cobranzas, session.authenticated, stateHydrated]);
+  }, [cobranzas]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpRoutes, erpRoutes);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('erpRoutes', erpRoutes);
-    }
-  }, [erpRoutes, session.authenticated, stateHydrated]);
+  }, [erpRoutes]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpScales, erpScales);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('erpScales', erpScales);
-    }
-  }, [erpScales, session.authenticated, stateHydrated]);
+  }, [erpScales]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpPurchases, erpPurchases);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('erpPurchases', erpPurchases);
-    }
-  }, [erpPurchases, session.authenticated, stateHydrated]);
+  }, [erpPurchases]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpSales, erpSales);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('erpSales', erpSales);
-    }
-  }, [erpSales, session.authenticated, stateHydrated]);
+  }, [erpSales]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpProductsFull, erpProductsFull);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('erpProductsFull', erpProductsFull);
-    }
-  }, [erpProductsFull, session.authenticated, stateHydrated]);
+  }, [erpProductsFull]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpSuppliers, erpSuppliers);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('erpSuppliers', erpSuppliers);
-    }
-  }, [erpSuppliers, session.authenticated, stateHydrated]);
+  }, [erpSuppliers]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpCityRates, erpCityRates);
-    if (session.authenticated && stateHydrated) {
-      stateService.set('erpCityRates', erpCityRates);
-    }
-  }, [erpCityRates, session.authenticated, stateHydrated]);
+  }, [erpCityRates]);
 
   useEffect(() => {
     if (session.authenticated) {
@@ -1187,15 +1229,18 @@ function App() {
           <SalesWorkspace
             products={inventoryProducts}
             setProducts={setProducts}
+            productsFull={erpProductsFull}
+            setProductsFull={setErpProductsFull}
             orders={orders}
             setOrders={setOrders}
+            setSales={setErpSales}
             clients={clients}
             paymentMethods={ERP_PAYMENT_METHODS}
             volumeScales={erpScales}
             cityRates={erpCityRates}
           />
         ) : activeView === 'pedidos' ? (
-          <OrdersView orders={orders} setOrders={setOrders} />
+          <OrdersView orders={orders} setOrders={setOrders} sales={erpSales} setSales={setErpSales} productsFull={erpProductsFull} />
         ) : activeView === 'clientes' ? (
           <ClientsView clients={clients} orders={orders} cobranzas={cobranzas} setCobranzas={setCobranzas} />
         ) : activeView === 'erp' ? (

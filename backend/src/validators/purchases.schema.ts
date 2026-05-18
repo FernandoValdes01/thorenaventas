@@ -23,7 +23,15 @@ export const purchaseBodySchema = z.object({
 });
 
 export const updatePurchaseBodySchema = z.object({
+  supplierId: z.string().uuid().optional(),
+  date: z.string().min(1).optional(),
+  purchaseOrder: z.string().optional(),
+  quantity: z.number().int().min(1).optional(),
+  unitCost: z.number().min(0).optional(),
+  transportUnit: z.number().min(0).optional(),
   reception: z.enum(['Recibido', 'Pendiente', 'Con observacion']).optional(),
   doc: z.string().optional(),
   observation: z.string().optional(),
+}).refine((value) => Object.keys(value).length > 0, {
+  message: 'Debes enviar al menos un campo para actualizar.',
 });

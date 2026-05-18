@@ -4,8 +4,8 @@ import { purchasesService } from '../services/purchases.service';
 import { purchaseBodySchema, updatePurchaseBodySchema } from '../validators/purchases.schema';
 
 export const purchasesRoutes = new Hono()
-  .get('/', (c) => ok(c, { items: [], source: 'stub' }))
-  .get('/:id', (c) => ok(c, { id: c.req.param('id'), source: 'stub' }))
+  .get('/', async (c) => ok(c, await purchasesService.list()))
+  .get('/:id', async (c) => ok(c, await purchasesService.getById(c.req.param('id'))))
   .post('/', async (c) => {
     const body = await c.req.json();
     const parsed = purchaseBodySchema.safeParse(body);
@@ -27,5 +27,5 @@ export const purchasesRoutes = new Hono()
       return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message || 'Actualizacion invalida.', 400);
     }
 
-    return ok(c, { updated: true, id: c.req.param('id'), payload: parsed.data });
+    return ok(c, await purchasesService.update(c.req.param('id'), parsed.data));
   });

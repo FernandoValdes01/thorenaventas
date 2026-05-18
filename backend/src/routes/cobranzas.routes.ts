@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { ok } from '../lib/http';
+import { cobranzasService } from '../services/cobranzas.service';
 
 export const cobranzasRoutes = new Hono()
-  .get('/', (c) => ok(c, { items: [], source: 'stub' }))
-  .get('/:id', (c) => ok(c, { id: c.req.param('id'), source: 'stub' }))
-  .post('/', (c) => ok(c, { created: true }, 201))
-  .patch('/:id', (c) => ok(c, { updated: true, id: c.req.param('id') }))
-  .patch('/:id/status', (c) => ok(c, { updatedStatus: true, id: c.req.param('id') }));
+  .get('/', async (c) => ok(c, await cobranzasService.list()))
+  .post('/', async (c) => ok(c, await cobranzasService.create(await c.req.json()), 201))
+  .patch('/:id', async (c) => ok(c, await cobranzasService.update(c.req.param('id'), await c.req.json())))
+  .patch('/:id/status', async (c) => ok(c, await cobranzasService.update(c.req.param('id'), await c.req.json())))
+  .delete('/:id', async (c) => ok(c, await cobranzasService.remove(c.req.param('id'))));

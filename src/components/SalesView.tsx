@@ -4,6 +4,7 @@ import autoTable from 'jspdf-autotable';
 import { COMPANY_INFO } from '../data/companyInfo';
 import { DEFAULT_SELLER, logo as logoUrl } from '../data/appData';
 import { buildProductOptionLabel, getActiveOffer, getCurrentPrice } from '../lib/catalog';
+import { ordersService } from '../services/orders.service';
 
 const EMPTY_FORM = {
   clientId: '',
@@ -256,7 +257,7 @@ const buildPricedItem = (product, quantity, scales) => {
   };
 };
 
-function SalesView({ products, setProducts, orders, setOrders, clients, paymentMethods, volumeScales, cityRates }) {
+function SalesView({ products, setProducts, productsFull, setProductsFull, orders, setOrders, setSales, clients, paymentMethods, volumeScales, cityRates }) {
   const [saleChannel, setSaleChannel] = useState('terreno');
   const [form, setForm] = useState(EMPTY_FORM);
   const [draft, setDraft] = useState(() => createInitialDraft(products));
@@ -818,7 +819,7 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
     }
   };
 
-  const handleGenerateOrder = (event) => {
+  const handleGenerateOrder = async (event) => {
     event.preventDefault();
 
     const nextErrors = isValidOrderDraft({ form, selectedClient, items });
@@ -832,8 +833,16 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
 
     const initialStatus = SALE_CHANNELS[saleChannel]?.initialStatus || 'Pedido';
     const newOrder = buildOrderPayload(initialStatus);
+    const saveResult = await ordersService.create(newOrder);
 
-    setOrders((current) => [...current, newOrder]);
+    if (!saveResult.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar pedido en base de datos: ${saveResult.error.message}` });
+      return;
+    }
+
+    const savedOrder = saveResult.data || newOrder;
+
+    setOrders((current) => [...current, savedOrder]);
 
     setProducts((current) =>
       current.map((product) => {
@@ -849,6 +858,55 @@ function SalesView({ products, setProducts, orders, setOrders, clients, paymentM
         };
       }),
     );
+
+    if (setProductsFull) {
+      setProductsFull((current) =>
+        current.map((product) => {
+          const soldItem = items.find((item) => item.productId === product.id || item.productId === product.sku);
+
+          if (!soldItem) {
+            return product;
+          }
+
+          return {
+            ...product,
+            stock: Math.max(0, Number(product.stock) - soldItem.quantity),
+          };
+        }),
+      );
+    }
+
+    if (initialStatus === 'Pagado' && setSales) {
+      const productCostByKey = new Map();
+      (productsFull || []).forEach((product) => {
+        const cost = Math.max(0, Number(product.finalCost ?? product.purchaseCost) || 0);
+        [product.id, product.sku, product.product, product.name].filter(Boolean).forEach((key) => productCostByKey.set(String(key), cost));
+      });
+
+      const saleRows = newOrder.items.map((item, index) => {
+        const sale = Math.max(0, Number(item.subtotal) || 0);
+        const unitCost = productCostByKey.get(String(item.productId)) ?? productCostByKey.get(String(item.productName)) ?? 0;
+        const cost = Math.max(0, unitCost * item.quantity);
+        const profit = Math.max(0, sale - cost);
+        return {
+          id: `ven-${newOrder.code}-${index}`,
+          date: String(newOrder.createdAt).slice(0, 10),
+          client: newOrder.customerName,
+          zone: newOrder.clientSnapshot?.zone || newOrder.dispatchCity || 'Sin zona',
+          sector: newOrder.clientSnapshot?.sector || 'Sin sector',
+          seller: newOrder.sellerName,
+          orderCode: newOrder.code,
+          product: item.productName,
+          sale,
+          cost,
+          profit,
+          marginPct: sale > 0 ? profit / sale : 0,
+          paymentMethod: newOrder.paymentMethod,
+          dispatchStatus: 'Pagado',
+        };
+      });
+      setSales((current) => [...saleRows.filter((row) => !current.some((item) => item.orderCode === row.orderCode && item.product === row.product)), ...current]);
+    }
 
     setFeedback({ type: 'success', text: `Pedido generado correctamente. Codigo ${newOrder.code} en estado ${initialStatus}.` });
     setErrors([]);

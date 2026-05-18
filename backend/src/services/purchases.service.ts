@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { products, purchases, suppliers } from '../db/schema';
 
@@ -18,7 +18,118 @@ type PurchasePayload = {
   }>;
 };
 
+type UpdatePurchasePayload = {
+  supplierId?: string;
+  date?: string;
+  purchaseOrder?: string;
+  quantity?: number;
+  unitCost?: number;
+  transportUnit?: number;
+  reception?: 'Recibido' | 'Pendiente' | 'Con observacion';
+  doc?: string;
+  observation?: string;
+};
+
+const numberValue = (value: unknown) => Number(value) || 0;
+const dateInput = (value: Date | string | null | undefined) => {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+};
+
+function toPurchase(row: {
+  id: string;
+  supplierId: string | null;
+  supplier: string | null;
+  productId: string | null;
+  productSku: string | null;
+  product: string | null;
+  date: Date;
+  purchaseOrder: string;
+  quantity: number;
+  unitCost: string;
+  transportUnit: string;
+  totalCost: string;
+  reception: string;
+  doc: string;
+  observation: string;
+}) {
+  const unitCost = numberValue(row.unitCost);
+  const transportUnit = numberValue(row.transportUnit);
+  return {
+    id: row.id,
+    supplierId: row.supplierId || '',
+    supplier: row.supplier || '',
+    productId: row.productId || '',
+    productSku: row.productSku || '',
+    sku: row.productSku || '',
+    product: row.product || '',
+    date: dateInput(row.date),
+    purchaseOrder: row.purchaseOrder,
+    quantity: row.quantity,
+    unitCost,
+    transportUnit,
+    totalCost: numberValue(row.totalCost) || row.quantity * (unitCost + transportUnit),
+    reception: row.reception,
+    doc: row.doc,
+    observation: row.observation,
+  };
+}
+
 export const purchasesService = {
+  list: async () => {
+    const rows = await db
+      .select({
+        id: purchases.id,
+        supplierId: purchases.supplierId,
+        supplier: suppliers.name,
+        productId: purchases.productId,
+        productSku: products.sku,
+        product: products.name,
+        date: purchases.date,
+        purchaseOrder: purchases.purchaseOrder,
+        quantity: purchases.quantity,
+        unitCost: purchases.unitCost,
+        transportUnit: purchases.transportUnit,
+        totalCost: purchases.totalCost,
+        reception: purchases.reception,
+        doc: purchases.doc,
+        observation: purchases.observation,
+      })
+      .from(purchases)
+      .leftJoin(suppliers, eq(purchases.supplierId, suppliers.id))
+      .leftJoin(products, eq(purchases.productId, products.id))
+      .orderBy(desc(purchases.date));
+    return rows.map(toPurchase);
+  },
+
+  getById: async (id: string) => {
+    const rows = await db
+      .select({
+        id: purchases.id,
+        supplierId: purchases.supplierId,
+        supplier: suppliers.name,
+        productId: purchases.productId,
+        productSku: products.sku,
+        product: products.name,
+        date: purchases.date,
+        purchaseOrder: purchases.purchaseOrder,
+        quantity: purchases.quantity,
+        unitCost: purchases.unitCost,
+        transportUnit: purchases.transportUnit,
+        totalCost: purchases.totalCost,
+        reception: purchases.reception,
+        doc: purchases.doc,
+        observation: purchases.observation,
+      })
+      .from(purchases)
+      .leftJoin(suppliers, eq(purchases.supplierId, suppliers.id))
+      .leftJoin(products, eq(purchases.productId, products.id))
+      .where(eq(purchases.id, id))
+      .limit(1);
+    return rows[0] ? toPurchase(rows[0]) : null;
+  },
+
   create: async (payload: PurchasePayload) => {
     return db.transaction(async (tx) => {
       let supplierId = payload.supplierId || '';
@@ -88,6 +199,47 @@ export const purchasesService = {
       }
 
       return { supplierId, created: createdRows.length, items: createdRows };
+    });
+  },
+
+  update: async (id: string, payload: UpdatePurchasePayload) => {
+    return db.transaction(async (tx) => {
+      const currentRow = await tx.select().from(purchases).where(eq(purchases.id, id)).limit(1);
+      const current = currentRow[0];
+      if (!current) return null;
+
+      const quantity = payload.quantity !== undefined ? Math.max(1, Math.round(Number(payload.quantity) || 1)) : current.quantity;
+      const unitCost = payload.unitCost !== undefined ? Math.max(0, Number(payload.unitCost) || 0) : numberValue(current.unitCost);
+      const transportUnit = payload.transportUnit !== undefined ? Math.max(0, Number(payload.transportUnit) || 0) : numberValue(current.transportUnit);
+      const values: Partial<typeof purchases.$inferInsert> = { updatedAt: sql`now()` as unknown as Date };
+      if (payload.supplierId !== undefined) values.supplierId = payload.supplierId;
+      if (payload.date !== undefined) values.date = new Date(payload.date);
+      if (payload.purchaseOrder !== undefined) values.purchaseOrder = payload.purchaseOrder;
+      if (payload.quantity !== undefined) values.quantity = quantity;
+      if (payload.unitCost !== undefined) values.unitCost = String(unitCost);
+      if (payload.transportUnit !== undefined) values.transportUnit = String(transportUnit);
+      if (payload.quantity !== undefined || payload.unitCost !== undefined || payload.transportUnit !== undefined) {
+        values.totalCost = String(quantity * (unitCost + transportUnit));
+      }
+      if (payload.reception !== undefined) values.reception = payload.reception;
+      if (payload.doc !== undefined) values.doc = payload.doc;
+      if (payload.observation !== undefined) values.observation = payload.observation;
+
+      const updated = await tx.update(purchases).set(values).where(eq(purchases.id, id)).returning();
+
+      if (payload.quantity !== undefined && current.productId) {
+        const productRow = await tx.select({ stock: products.stock }).from(products).where(eq(products.id, current.productId)).limit(1);
+        const product = productRow[0];
+        if (product) {
+          const delta = quantity - current.quantity;
+          await tx
+            .update(products)
+            .set({ stock: Math.max(0, (Number(product.stock) || 0) + delta), updatedAt: sql`now()` })
+            .where(eq(products.id, current.productId));
+        }
+      }
+
+      return updated[0] ? { updated: true, id } : null;
     });
   },
 };

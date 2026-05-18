@@ -1200,6 +1200,10 @@ textarea:focus {
   gap: 16px;
 }
 
+.erp-content-layout-full {
+  grid-template-columns: 1fr;
+}
+
 .erp-grid {
   display: grid;
   gap: 14px;
@@ -1344,6 +1348,22 @@ textarea:focus {
   min-width: 82px;
   padding: 8px 10px;
   border-radius: 12px;
+}
+
+.suppliers-table {
+  min-width: 980px;
+}
+
+.suppliers-table th:first-child,
+.suppliers-table td:first-child {
+  min-width: 190px;
+}
+
+.suppliers-table th:nth-child(4),
+.suppliers-table td:nth-child(4),
+.suppliers-table th:nth-child(8),
+.suppliers-table td:nth-child(8) {
+  min-width: 220px;
 }
 
 @media (max-width: 1080px) {
