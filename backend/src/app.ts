@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import { handle } from 'hono/vercel';
+import type { Context } from 'hono';
+import { handle } from '@hono/node-server/vercel';
 import { sql } from 'drizzle-orm';
 import { db } from './db/client';
 import { authMiddleware } from './middlewares/auth';
@@ -30,7 +31,7 @@ export const app = new Hono();
 app.use('*', corsMiddleware);
 app.use('*', errorHandler);
 
-app.get('/health', async (c) => {
+const healthHandler = async (c: Context) => {
   try {
     await db.execute(sql`select 1`);
     return ok(c, { status: 'ok', database: 'connected' });
@@ -46,7 +47,10 @@ app.get('/health', async (c) => {
       500,
     );
   }
-});
+};
+
+app.get('/health', healthHandler);
+app.get('/api/v1/health', healthHandler);
 app.route('/api/v1/auth', authRoutes);
 
 app.use('/api/v1/*', authMiddleware);

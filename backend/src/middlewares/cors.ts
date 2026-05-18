@@ -1,8 +1,8 @@
 import { cors } from 'hono/cors';
-import { env } from '../lib/env';
+import { trustedOrigins } from '../lib/origins';
 
 export const corsMiddleware = cors({
-  origin: [env.FRONTEND_URL, 'http://localhost:5173'],
+  origin: trustedOrigins,
   allowHeaders: ['Content-Type', 'Authorization'],
   allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: true,

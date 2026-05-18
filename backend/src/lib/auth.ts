@@ -3,6 +3,7 @@ import { betterAuth } from 'better-auth/minimal';
 import { db } from '../db/client';
 import * as schema from '../db/schema';
 import { env } from './env';
+import { trustedOrigins } from './origins';
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -12,7 +13,7 @@ export const auth = betterAuth({
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
   basePath: '/api/v1/auth',
-  trustedOrigins: [env.FRONTEND_URL, 'http://localhost:5173'],
+  trustedOrigins,
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 6,
