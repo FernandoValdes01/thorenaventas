@@ -17,7 +17,14 @@ type ApiFailure = {
 
 export type ApiResponse<T> = ApiSuccess<T> | ApiFailure;
 
+function isApiResponseShape<T>(value: unknown): value is ApiResponse<T> {
+  return typeof value === 'object' && value !== null && 'success' in value;
+}
+
 async function request<T>(path: string, method: HttpMethod, body?: unknown): Promise<ApiResponse<T>> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+
   try {
     const response = await fetch(`${env.apiUrl}${path}`, {
       method,
@@ -25,11 +32,39 @@ async function request<T>(path: string, method: HttpMethod, body?: unknown): Pro
         'Content-Type': 'application/json',
       },
       credentials: 'include',
+      signal: controller.signal,
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    const payload = (await response.json()) as ApiResponse<T>;
-    return payload;
+    const contentType = response.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json')
+      ? (await response.json())
+      : ({
+          success: false,
+          error: {
+            code: 'INVALID_RESPONSE',
+            message: 'Respuesta invalida del servidor.',
+          },
+        } as ApiResponse<T>);
+
+    if (isApiResponseShape<T>(payload)) {
+      return payload;
+    }
+
+    if (response.ok) {
+      return {
+        success: true,
+        data: payload as T,
+      };
+    }
+
+    return {
+      success: false,
+      error: {
+        code: 'HTTP_ERROR',
+        message: 'Solicitud rechazada por el servidor.',
+      },
+    };
   } catch {
     return {
       success: false,
@@ -38,6 +73,8 @@ async function request<T>(path: string, method: HttpMethod, body?: unknown): Pro
         message: 'No se pudo conectar con el servidor.',
       },
     };
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 

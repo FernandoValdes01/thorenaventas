@@ -24,13 +24,18 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [loading, setLoading] = useState(true);
 
   const refreshSession = async () => {
-    const response = await authService.getSession();
-    if (response.success && response.data?.user) {
-      setSession({ authenticated: true, user: response.data.user });
-    } else {
+    try {
+      const response = await authService.getSession();
+      if (response.success && response.data?.user) {
+        setSession({ authenticated: true, user: response.data.user });
+      } else {
+        setSession(defaultSession);
+      }
+    } catch {
       setSession(defaultSession);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {
