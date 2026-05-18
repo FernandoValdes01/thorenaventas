@@ -67,3 +67,5 @@ app.route('/api/v1/cobranzas', cobranzasRoutes);
 app.route('/api/v1/dashboard', dashboardRoutes);
 app.route('/api/v1/routes', routesRoutes);
 app.route('/api/v1/state', stateRoutes);
+
+export default app.fetch;
