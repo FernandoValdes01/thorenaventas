@@ -132,6 +132,13 @@ npm run db:clear
 
 Para borrar tambien usuarios/login, usar `npm run db:clear -- --include-auth`.
 
+Para poblar la base con muchos datos de prueba (clientes, pedidos, deudas pendientes/vencidas/pagadas, ventas, rutas, compras):
+
+```bash
+cd backend
+npm run db:seed:demo
+```
+
 ## TODOs principales siguientes
 
 1. Migrar frontend completo a TypeScript (`.tsx/.ts`) por fases.

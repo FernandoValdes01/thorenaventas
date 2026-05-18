@@ -24,18 +24,21 @@ const businessTables = [
 const authTables = ['session', 'account', 'verification', 'user', 'users'];
 const tables = includeAuth ? [...businessTables, ...authTables] : businessTables;
 
-await db.execute(sql`
-  do $$
-  declare
-    table_name text;
-  begin
-    foreach table_name in array ${tables}::text[] loop
-      if to_regclass('public.' || table_name) is not null then
-        execute format('truncate table public.%I restart identity cascade', table_name);
-      end if;
-    end loop;
-  end $$;
-`);
+function isSafeIdentifier(value: string) {
+  return /^[a-z_][a-z0-9_]*$/i.test(value);
+}
+
+for (const table of tables) {
+  if (!isSafeIdentifier(table)) {
+    throw new Error(`Nombre de tabla invalido: ${table}`);
+  }
+
+  const exists = await db.execute(sql`select to_regclass(${`public.${table}`}) as regclass`);
+  const regclass = exists.rows[0]?.regclass;
+  if (!regclass) continue;
+
+  await db.execute(sql.raw(`truncate table public."${table}" restart identity cascade;`));
+}
 
 console.log(
   includeAuth

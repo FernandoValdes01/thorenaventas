@@ -10,6 +10,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:clear": "tsx scripts/clear-database.ts",
+    "db:seed:demo": "tsx scripts/seed-demo.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
