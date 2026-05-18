@@ -785,7 +785,7 @@ function OrdersView({ orders, setOrders, sales, setSales, productsFull }) {
   );
 }
 
-function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
+function ClientsView({ clients, orders, cobranzas }) {
   const dateFormatter = useMemo(() => new Intl.DateTimeFormat('es-CL', { dateStyle: 'medium' }), []);
 
   const latestOrderByClient = useMemo(() => {
@@ -866,7 +866,6 @@ function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
           balance,
           dueDate,
           lastPurchase,
-          cobranzaId: cobranza?.id || null,
         };
       })
       .sort((a, b) => {
@@ -890,11 +889,6 @@ function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
       ),
     [clientRows],
   );
-
-  const handleDeleteCobranza = (cobranzaId) => {
-    cobranzasService.remove(cobranzaId);
-    setCobranzas((current) => current.filter((item) => item.id !== cobranzaId));
-  };
 
   const formatDate = (date) => {
     if (!date || Number.isNaN(date.getTime())) return '-';
@@ -953,11 +947,6 @@ function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
                   </div>
                 </div>
 
-                {row.debtStatus === 'Pagada' && row.cobranzaId ? (
-                  <button className="button button-secondary" type="button" onClick={() => handleDeleteCobranza(row.cobranzaId)}>
-                    Eliminar cobranza
-                  </button>
-                ) : null}
               </article>
             );
           })
@@ -1252,7 +1241,7 @@ function App() {
         ) : activeView === 'pedidos' ? (
           <OrdersView orders={orders} setOrders={setOrders} sales={erpSales} setSales={setErpSales} productsFull={erpProductsFull} />
         ) : activeView === 'clientes' ? (
-          <ClientsView clients={clients} orders={orders} cobranzas={cobranzas} setCobranzas={setCobranzas} />
+          <ClientsView clients={clients} orders={orders} cobranzas={cobranzas} />
         ) : activeView === 'erp' ? (
           <ERPView
             products={products}
