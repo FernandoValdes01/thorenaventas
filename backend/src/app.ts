@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { handle } from 'hono/vercel';
 import { sql } from 'drizzle-orm';
 import { db } from './db/client';
 import { authMiddleware } from './middlewares/auth';
@@ -68,4 +69,4 @@ app.route('/api/v1/dashboard', dashboardRoutes);
 app.route('/api/v1/routes', routesRoutes);
 app.route('/api/v1/state', stateRoutes);
 
-export default app.fetch;
+export default handle(app);
