@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -115,10 +115,9 @@ const emptyScaleForm = {
 
 const emptyPurchaseForm = {
   date: todayISO(),
-  supplier: '',
+  supplierId: '',
   purchaseOrder: '',
-  sku: '',
-  product: '',
+  productSku: '',
   quantity: '1',
   unitCost: '0',
   transportUnit: '0',
@@ -128,6 +127,12 @@ const emptyPurchaseForm = {
 };
 
 const emptyProductForm = {
+  supplierId: '',
+  createSupplier: 'false',
+  newSupplierName: '',
+  newSupplierContact: '',
+  newSupplierPhone: '',
+  newSupplierEmail: '',
   sku: '',
   barcode: '',
   category: '',
@@ -141,6 +146,13 @@ const emptyProductForm = {
   stockMin: '0',
   location: '',
   status: 'Activo',
+  initialPurchaseQuantity: '1',
+  initialPurchaseUnitCost: '0',
+  initialPurchaseTransportUnit: '0',
+  initialPurchaseOrder: '',
+  initialPurchaseDoc: '',
+  initialPurchaseReception: 'Recibido',
+  initialPurchaseObservation: '',
 };
 
 const emptySaleForm = {
@@ -361,6 +373,31 @@ function ERPView({
       ordersCount: ordersMonth.length,
     };
   }, [clients, ordersMonth.length, productsFull, salesMonth]);
+
+  const suppliersById = useMemo(() => {
+    const map = new Map();
+    suppliers.forEach((supplier) => {
+      map.set(String(supplier.id), supplier);
+    });
+    return map;
+  }, [suppliers]);
+
+  const productsBySupplier = useMemo(() => {
+    const map = new Map();
+    productsFull.forEach((product) => {
+      const supplierId = String(product.supplierId || '');
+      if (!supplierId) return;
+      if (!map.has(supplierId)) map.set(supplierId, []);
+      map.get(supplierId).push(product);
+    });
+    return map;
+  }, [productsFull]);
+
+  const purchaseProductsForSupplier = useMemo(() => {
+    const supplierId = String(purchaseForm.supplierId || '');
+    if (!supplierId) return [];
+    return productsBySupplier.get(supplierId) || [];
+  }, [productsBySupplier, purchaseForm.supplierId]);
 
   const updateClientField = (key) => (event) => {
     setClientForm((current) => ({ ...current, [key]: event.target.value }));

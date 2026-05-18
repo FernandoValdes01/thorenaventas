@@ -21,6 +21,7 @@ import { quotesRoutes } from './routes/quotes.routes';
 import { routesRoutes } from './routes/routes.routes';
 import { salesRoutes } from './routes/sales.routes';
 import { suppliersRoutes } from './routes/suppliers.routes';
+import { stateRoutes } from './routes/state.routes';
 import { volumeScalesRoutes } from './routes/volume-scales.routes';
 
 export const app = new Hono();
@@ -65,3 +66,4 @@ app.route('/api/v1/suppliers', suppliersRoutes);
 app.route('/api/v1/cobranzas', cobranzasRoutes);
 app.route('/api/v1/dashboard', dashboardRoutes);
 app.route('/api/v1/routes', routesRoutes);
+app.route('/api/v1/state', stateRoutes);

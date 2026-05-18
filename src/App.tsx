@@ -27,6 +27,7 @@ import SalesWorkspace from './components/SalesView';
 import { readJSON, readString, removeItem, writeJSON, writeString } from './lib/storage';
 import { authService } from './services/auth.service';
 import { useAuth } from './hooks/useAuth';
+import { stateService } from './services/state.service';
 
 const STORAGE_KEYS = {
   themeMode: 'thorena.theme-mode',
@@ -248,50 +249,25 @@ function normalizeOrder(order) {
 }
 
 function loadOrders() {
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.orders, []);
-  return Array.isArray(stored) ? stored.map(normalizeOrder) : [];
+  return [];
 }
 
 function loadProducts() {
-  const fallback = ERP_PRODUCTS.length ? ERP_PRODUCTS : PRODUCTS;
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.products, fallback);
-  return normalizeProducts(Array.isArray(stored) ? stored : fallback);
+  return [];
 }
 
 function loadClients() {
-  const fallback = ERP_CLIENTS;
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.clients, fallback);
-  const source = Array.isArray(stored) ? stored : fallback;
-
-  return source.map((client) => ({
-    ...client,
-    contact: client.contact || '',
-    whatsapp: client.whatsapp || client.phone || '',
-    instagram: client.instagram || '',
-    monthlyTarget: Math.max(0, Number(client.monthlyTarget) || 0),
-    accumulatedSales: Math.max(0, Number(client.accumulatedSales) || 0),
-    goalProgress: Math.max(0, Number(client.goalProgress) || 0),
-    creditLimit: Math.max(0, Number(client.creditLimit) || 0),
-    sector: client.sector || '',
-    zone: client.zone || '',
-    frequency: client.frequency || 'Semanal',
-    notes: client.notes || client.observations || '',
-    status: client.status || 'Activo',
-    lastPurchase: normalizeDateValue(client.lastPurchase || ERP_CLIENT_LAST_PURCHASE[client.id] || ''),
-  }));
+  return [];
 }
 
 function loadCobranzas() {
-  const fallback = ERP_COBRANZAS;
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.cobranzas, fallback);
-  const source = Array.isArray(stored) ? stored : fallback;
-
-  return source.map((item, index) => normalizeCobranza(item, index)).filter((item) => item.clientName);
+  return [];
 }
 
 function loadErpModule(storageKey, fallback) {
-  const stored = readJSON(typeof window === 'undefined' ? null : window.localStorage, storageKey, fallback);
-  return Array.isArray(stored) ? stored : fallback;
+  void storageKey;
+  void fallback;
+  return [];
 }
 
 function formatCurrency(value) {
@@ -866,6 +842,7 @@ function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
 
 function App() {
   const { session, loading, refreshSession } = useAuth();
+  const [stateHydrated, setStateHydrated] = useState(false);
   const [themeMode, setThemeMode] = useState(() => getInitialThemeMode());
   const [resolvedTheme, setResolvedTheme] = useState(() => getResolvedTheme(getInitialThemeMode()));
   const [activeView, setActiveView] = useState(() =>
@@ -884,6 +861,65 @@ function App() {
   const [erpProductsFull, setErpProductsFull] = useState(() => loadErpModule(STORAGE_KEYS.erpProductsFull, ERP_PRODUCTS_FULL));
   const [erpSuppliers, setErpSuppliers] = useState(() => loadErpModule(STORAGE_KEYS.erpSuppliers, ERP_SUPPLIERS));
   const [erpCityRates, setErpCityRates] = useState(() => loadErpModule(STORAGE_KEYS.erpCityRates, ERP_CITY_RATES));
+
+  useEffect(() => {
+    if (!session.authenticated) {
+      setStateHydrated(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const hydrate = async () => {
+      const [
+        ordersRes,
+        productsRes,
+        clientsRes,
+        cobranzasRes,
+        routesRes,
+        scalesRes,
+        purchasesRes,
+        salesRes,
+        productsFullRes,
+        suppliersRes,
+        cityRatesRes,
+      ] = await Promise.all([
+        stateService.get('orders'),
+        stateService.get('products'),
+        stateService.get('clients'),
+        stateService.get('cobranzas'),
+        stateService.get('erpRoutes'),
+        stateService.get('erpScales'),
+        stateService.get('erpPurchases'),
+        stateService.get('erpSales'),
+        stateService.get('erpProductsFull'),
+        stateService.get('erpSuppliers'),
+        stateService.get('erpCityRates'),
+      ]);
+
+      if (cancelled) return;
+
+      setOrders(ordersRes.success && Array.isArray(ordersRes.data?.data) ? ordersRes.data.data.map(normalizeOrder) : []);
+      setProducts(productsRes.success && Array.isArray(productsRes.data?.data) ? normalizeProducts(productsRes.data.data) : []);
+      setClients(clientsRes.success && Array.isArray(clientsRes.data?.data) ? clientsRes.data.data.map((client) => ({ ...client })) : []);
+      setCobranzas(cobranzasRes.success && Array.isArray(cobranzasRes.data?.data) ? cobranzasRes.data.data : []);
+      setErpRoutes(routesRes.success && Array.isArray(routesRes.data?.data) ? routesRes.data.data : []);
+      setErpScales(scalesRes.success && Array.isArray(scalesRes.data?.data) ? scalesRes.data.data : []);
+      setErpPurchases(purchasesRes.success && Array.isArray(purchasesRes.data?.data) ? purchasesRes.data.data : []);
+      setErpSales(salesRes.success && Array.isArray(salesRes.data?.data) ? salesRes.data.data : []);
+      setErpProductsFull(productsFullRes.success && Array.isArray(productsFullRes.data?.data) ? productsFullRes.data.data : []);
+      setErpSuppliers(suppliersRes.success && Array.isArray(suppliersRes.data?.data) ? suppliersRes.data.data : []);
+      setErpCityRates(cityRatesRes.success && Array.isArray(cityRatesRes.data?.data) ? cityRatesRes.data.data : []);
+
+      setStateHydrated(true);
+    };
+
+    hydrate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session.authenticated]);
 
   useLayoutEffect(() => {
     const nextResolvedTheme = getResolvedTheme(themeMode);
@@ -929,47 +965,80 @@ function App() {
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.orders, orders);
-  }, [orders]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('orders', orders);
+    }
+  }, [orders, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.products, products);
-  }, [products]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('products', products);
+    }
+  }, [products, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.clients, clients);
-  }, [clients]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('clients', clients);
+    }
+  }, [clients, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.cobranzas, cobranzas);
-  }, [cobranzas]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('cobranzas', cobranzas);
+    }
+  }, [cobranzas, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpRoutes, erpRoutes);
-  }, [erpRoutes]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('erpRoutes', erpRoutes);
+    }
+  }, [erpRoutes, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpScales, erpScales);
-  }, [erpScales]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('erpScales', erpScales);
+    }
+  }, [erpScales, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpPurchases, erpPurchases);
-  }, [erpPurchases]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('erpPurchases', erpPurchases);
+    }
+  }, [erpPurchases, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpSales, erpSales);
-  }, [erpSales]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('erpSales', erpSales);
+    }
+  }, [erpSales, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpProductsFull, erpProductsFull);
-  }, [erpProductsFull]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('erpProductsFull', erpProductsFull);
+    }
+  }, [erpProductsFull, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpSuppliers, erpSuppliers);
-  }, [erpSuppliers]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('erpSuppliers', erpSuppliers);
+    }
+  }, [erpSuppliers, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpCityRates, erpCityRates);
-  }, [erpCityRates]);
+    if (session.authenticated && stateHydrated) {
+      stateService.set('erpCityRates', erpCityRates);
+    }
+  }, [erpCityRates, session.authenticated, stateHydrated]);
 
   useEffect(() => {
     if (session.authenticated) {
@@ -1026,6 +1095,10 @@ function App() {
 
   if (!session.authenticated) {
     return <LoginScreen onLogin={handleLogin} />;
+  }
+
+  if (!stateHydrated) {
+    return <main className="auth-screen"><section className="auth-card panel"><p>Cargando sistema...</p></section></main>;
   }
 
   return (
