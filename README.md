@@ -75,8 +75,12 @@ Variables backend (`backend/.env`):
 
 ## Auth (estado)
 
-- Login MVP actual en frontend sigue con credenciales temporales hardcodeadas.
-- Backend ya incluye base de rutas `auth` y middleware de proteccion para evolucionar a Better Auth real.
+- Better Auth integrado sobre PostgreSQL (Neon) con tablas `user/session/account/verification`.
+- Frontend login usa endpoints reales:
+  - `POST /api/v1/auth/sign-in/email`
+  - `POST /api/v1/auth/sign-up/email`
+  - `GET /api/v1/auth/get-session`
+  - `POST /api/v1/auth/sign-out`
 
 ## Datos mock y hardcode actuales
 

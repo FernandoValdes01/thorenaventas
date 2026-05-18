@@ -9,11 +9,13 @@
 - Capa frontend de servicios/API/types inicial creada.
 - Variables de entorno documentadas (`.env.example` frontend y backend).
 
-## Fase 2 (siguiente)
+## Fase 2 (en progreso)
 
-- Migrar `src/App.jsx` a `src/App.tsx`.
-- Migrar `SalesView`, `ERPView`, `ProductsView` a `.tsx`.
-- Tipar estado compartido y utilidades de `catalog`/`storage`.
+- [x] Migrar `src/App.jsx` a `src/App.tsx`.
+- [x] Migrar `src/components/SalesView.jsx` a `src/components/SalesView.tsx`.
+- [x] Migrar `src/main.jsx` a `src/main.tsx`.
+- [ ] Migrar `ERPView` y `ProductsView` a `.tsx`.
+- [ ] Tipar estado compartido y utilidades de `catalog`/`storage`.
 
 ## Fase 3
 

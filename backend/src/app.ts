@@ -1,7 +1,10 @@
 import { Hono } from 'hono';
+import { sql } from 'drizzle-orm';
+import { db } from './db/client';
 import { authMiddleware } from './middlewares/auth';
 import { corsMiddleware } from './middlewares/cors';
 import { errorHandler } from './middlewares/error-handler';
+import { requireRole } from './middlewares/require-role';
 import { ok } from './lib/http';
 import { authRoutes } from './routes/auth.routes';
 import { cityRatesRoutes } from './routes/city-rates.routes';
@@ -25,10 +28,27 @@ export const app = new Hono();
 app.use('*', corsMiddleware);
 app.use('*', errorHandler);
 
-app.get('/health', (c) => ok(c, { status: 'ok' }));
+app.get('/health', async (c) => {
+  try {
+    await db.execute(sql`select 1`);
+    return ok(c, { status: 'ok', database: 'connected' });
+  } catch {
+    return c.json(
+      {
+        success: false,
+        error: {
+          code: 'DB_UNAVAILABLE',
+          message: 'Base de datos no disponible.',
+        },
+      },
+      500,
+    );
+  }
+});
 app.route('/api/v1/auth', authRoutes);
 
 app.use('/api/v1/*', authMiddleware);
+app.use('/api/v1/*', requireRole(['admin']));
 
 app.route('/api/v1/clients', clientsRoutes);
 app.route('/api/v1/products', productsRoutes);

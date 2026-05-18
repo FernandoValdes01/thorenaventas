@@ -25,8 +25,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   const refreshSession = async () => {
     const response = await authService.getSession();
-    if (response.success) {
-      setSession(response.data);
+    if (response.success && response.data?.user) {
+      setSession({ authenticated: true, user: response.data.user });
+    } else {
+      setSession(defaultSession);
     }
     setLoading(false);
   };

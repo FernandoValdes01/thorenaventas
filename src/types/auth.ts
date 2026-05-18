@@ -11,3 +11,11 @@ export interface AuthSession {
   authenticated: boolean;
   user: User | null;
 }
+
+export interface BetterAuthSessionPayload {
+  session: {
+    id: string;
+    expiresAt: string;
+  };
+  user: User;
+}

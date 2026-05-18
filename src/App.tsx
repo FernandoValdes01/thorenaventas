@@ -4,7 +4,6 @@ import {
   APP_SUBTITLE,
   DEFAULT_SELLER,
   CHECKLIST_ITEMS,
-  LOGIN_CREDENTIALS,
   PRODUCTS,
   logo,
 } from './data/appData';
@@ -23,21 +22,14 @@ import {
 } from './data/erpModulesSeed';
 import ProductsView from './components/ProductsView';
 import ERPView from './components/ERPView';
-import {
-  buildProductOptionLabel,
-  formatCurrency as formatProductCurrency,
-  getActiveOffer,
-  getCurrentPrice,
-  mergeProductList,
-  normalizeProducts,
-  updateProductOffer,
-} from './lib/catalog';
+import { normalizeProducts } from './lib/catalog';
 import SalesWorkspace from './components/SalesView';
 import { readJSON, readString, removeItem, writeJSON, writeString } from './lib/storage';
+import { authService } from './services/auth.service';
+import { useAuth } from './hooks/useAuth';
 
 const STORAGE_KEYS = {
   themeMode: 'thorena.theme-mode',
-  auth: 'thorena.authenticated',
   orders: 'thorena.orders',
   activeView: 'thorena.active-view',
   products: 'thorena.products',
@@ -55,14 +47,6 @@ const STORAGE_KEYS = {
 const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pagado', 'Pendiente', 'Anulado'];
 const FINAL_ORDER_STATUSES = new Set(['Pagado', 'Anulado', 'Terminado']);
 const ORDER_DETAIL_EXPAND_THRESHOLD = 4;
-
-const EMPTY_FORM = {
-  customerName: '',
-  customerRut: '',
-  customerNumber: '',
-  deliveryAddress: '',
-  observations: '',
-};
 
 const currencyFormatter = new Intl.NumberFormat('es-CL', {
   style: 'currency',
@@ -86,10 +70,6 @@ function getResolvedTheme(themeMode) {
 
 function getInitialThemeMode() {
   return readString(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.themeMode, 'system');
-}
-
-function getInitialAuth() {
-  return readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.auth, 'false') === 'true';
 }
 
 function normalizeActiveView(view) {
@@ -314,29 +294,6 @@ function loadErpModule(storageKey, fallback) {
   return Array.isArray(stored) ? stored : fallback;
 }
 
-function createInitialDraft(products) {
-  const availableProduct = products.find((product) => product.stock > 0) || products[0] || null;
-
-  return {
-    productId: availableProduct?.id || '',
-    quantity: 1,
-  };
-}
-
-function formatOrderCode(number) {
-  return `PED-${String(number).padStart(4, '0')}`;
-}
-
-function getNextOrderNumber(orders) {
-  const highest = orders.reduce((max, order) => {
-    const match = /^PED-(\d{4})$/.exec(order.code);
-    const parsed = match ? Number(match[1]) : 0;
-    return Math.max(max, parsed);
-  }, 0);
-
-  return highest + 1;
-}
-
 function formatCurrency(value) {
   return currencyFormatter.format(value);
 }
@@ -349,25 +306,22 @@ function getCustomerContact(order) {
   return order.customerNumber || order.contactPhone || '-';
 }
 
-function getProductById(productId, catalog = PRODUCTS) {
-  return catalog.find((product) => product.id === productId) || null;
-}
-
 function LoginScreen({ onLogin }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
-    if (username.trim() === LOGIN_CREDENTIALS.username && password === LOGIN_CREDENTIALS.password) {
+    const logged = await onLogin(username.trim(), password);
+
+    if (logged) {
       setError('');
-      onLogin();
       return;
     }
 
-    setError('Credenciales inválidas. Usa usuario1 / boceto.');
+    setError('Credenciales invalidas. Revisa usuario y contrasena.');
   };
 
   return (
@@ -391,7 +345,7 @@ function LoginScreen({ onLogin }) {
               autoComplete="username"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="usuario1"
+              placeholder="usuario"
             />
           </label>
 
@@ -402,7 +356,7 @@ function LoginScreen({ onLogin }) {
               autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="boceto"
+              placeholder="contrasena"
             />
           </label>
 
@@ -500,285 +454,6 @@ function Header({ activeView, onChangeView, onLogout, resolvedTheme, onToggleThe
         </button>
       </div>
     </header>
-  );
-}
-
-function SalesView({ orders, setOrders }) {
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [draft, setDraft] = useState(EMPTY_DRAFT);
-  const [items, setItems] = useState([]);
-  const [feedback, setFeedback] = useState(null);
-  const [errors, setErrors] = useState([]);
-
-  const total = useMemo(() => items.reduce((sum, item) => sum + item.subtotal, 0), [items]);
-
-  const handleFieldChange = (key) => (event) => {
-    setForm((current) => ({ ...current, [key]: event.target.value }));
-    setFeedback(null);
-  };
-
-  const handleDraftChange = (key) => (event) => {
-    setDraft((current) => ({ ...current, [key]: event.target.value }));
-    setFeedback(null);
-  };
-
-  const handleAddProduct = (event) => {
-    event.preventDefault();
-    setFeedback(null);
-
-    const quantity = Number(draft.quantity);
-    const product = getProductById(draft.productId);
-
-    if (!product) {
-      return;
-    }
-
-    if (!Number.isInteger(quantity) || quantity < 1) {
-      setErrors(['La cantidad debe ser un número entero mayor que 0.']);
-      return;
-    }
-
-    setErrors([]);
-
-    setItems((current) => {
-      const existing = current.find((item) => item.productId === product.id);
-
-      if (existing) {
-        return current.map((item) =>
-          item.productId === product.id
-            ? {
-                ...item,
-                quantity: item.quantity + quantity,
-                subtotal: (item.quantity + quantity) * item.unitPrice,
-              }
-            : item,
-        );
-      }
-
-      return [
-        ...current,
-        {
-          productId: product.id,
-          productName: product.name,
-          unitPrice: product.price,
-          quantity,
-          subtotal: product.price * quantity,
-        },
-      ];
-    });
-
-    setDraft((current) => ({ ...current, quantity: 1 }));
-  };
-
-  const handleRemoveItem = (productId) => {
-    setItems((current) => current.filter((item) => item.productId !== productId));
-  };
-
-  const handleGenerateOrder = (event) => {
-    event.preventDefault();
-
-    const nextErrors = [];
-    const customerContact = form.customerNumber.trim();
-
-    if (!form.customerName.trim()) nextErrors.push('Ingresa el nombre del cliente o negocio.');
-    if (!form.customerRut.trim()) nextErrors.push('Ingresa el RUT del cliente o negocio.');
-    if (!customerContact) nextErrors.push('Ingresa el número de cliente o teléfono de contacto.');
-    if (!form.deliveryAddress.trim()) nextErrors.push('Ingresa la dirección de despacho.');
-    if (items.length === 0) nextErrors.push('Agrega al menos un producto al pedido.');
-
-    setErrors(nextErrors);
-
-    if (nextErrors.length > 0) {
-      setFeedback(null);
-      return;
-    }
-
-    const code = formatOrderCode(getNextOrderNumber(orders));
-
-    const newOrder = normalizeOrder({
-      code,
-      createdAt: new Date().toISOString(),
-      customerName: form.customerName.trim(),
-      customerRut: form.customerRut.trim(),
-      customerNumber: customerContact,
-      contactPhone: customerContact,
-      deliveryAddress: form.deliveryAddress.trim(),
-      observations: form.observations.trim(),
-      sellerName: DEFAULT_SELLER.name,
-      sellerRut: DEFAULT_SELLER.rut,
-      status: 'Pendiente',
-      items,
-      checklist: {},
-      showReceipt: false,
-    });
-
-    setOrders((current) => [...current, newOrder]);
-
-    setFeedback({ type: 'success', text: `Pedido generado correctamente. Código ${code}.` });
-    setErrors([]);
-    setForm(EMPTY_FORM);
-    setDraft(EMPTY_DRAFT);
-    setItems([]);
-  };
-
-  return (
-    <section className="screen">
-      <div className="screen-heading">
-        <p className="eyebrow">Ventas</p>
-        <h2>Crear pedido en terreno</h2>
-        <p className="muted">
-          Completa los datos, agrega productos y genera el pedido para enviarlo a gestión.
-        </p>
-      </div>
-
-      {feedback ? (
-        <div className={`notice notice-${feedback.type}`} role="status">
-          {feedback.text}
-        </div>
-      ) : null}
-
-      {errors.length > 0 ? (
-        <div className="notice notice-error" role="alert">
-          <ul>
-            {errors.map((error) => (
-              <li key={error}>{error}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      <div className="sales-layout">
-        <form id="sales-form" className="panel sales-panel" onSubmit={handleGenerateOrder}>
-          <div className="panel-title">
-            <h3>Datos del pedido</h3>
-            <p className="muted">Información del cliente para construir el pedido interno.</p>
-          </div>
-
-          <div className="form-grid">
-            <label className="field field-wide">
-              <span>Nombre del cliente o negocio</span>
-              <input value={form.customerName} onChange={handleFieldChange('customerName')} />
-            </label>
-
-            <label className="field">
-              <span>RUT del cliente o negocio</span>
-              <input value={form.customerRut} onChange={handleFieldChange('customerRut')} />
-            </label>
-
-            <label className="field field-wide">
-              <span>Número de cliente / Teléfono o contacto</span>
-              <input value={form.customerNumber} onChange={handleFieldChange('customerNumber')} />
-            </label>
-
-            <label className="field field-wide">
-              <span>Dirección de despacho</span>
-              <input value={form.deliveryAddress} onChange={handleFieldChange('deliveryAddress')} />
-            </label>
-
-            <label className="field field-wide">
-              <span>Observaciones opcionales</span>
-              <textarea
-                rows="3"
-                value={form.observations}
-                onChange={handleFieldChange('observations')}
-              />
-            </label>
-          </div>
-
-          <div className="panel-divider" />
-
-          <div className="panel-title">
-            <h3>Agregar productos</h3>
-            <p className="muted">Selecciona un producto y suma cantidades al pedido.</p>
-          </div>
-
-          <div className="product-builder">
-            <label className="field">
-              <span>Producto</span>
-              <select value={draft.productId} onChange={handleDraftChange('productId')}>
-                {PRODUCTS.map((product) => (
-                  <option key={product.id} value={product.id}>
-                    {product.name} - {formatCurrency(product.price)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field quantity-field">
-              <span>Cantidad</span>
-              <input
-                type="number"
-                min="1"
-                step="1"
-                inputMode="numeric"
-                value={draft.quantity}
-                onChange={handleDraftChange('quantity')}
-              />
-            </label>
-
-            <button className="button button-secondary add-button" type="button" onClick={handleAddProduct}>
-              Agregar producto
-            </button>
-          </div>
-        </form>
-
-        <aside className="panel cart-panel">
-          <div className="panel-title">
-            <h3>Productos agregados</h3>
-            <p className="muted">Revisa, elimina y genera el pedido.</p>
-          </div>
-
-          {items.length === 0 ? (
-            <div className="empty-state empty-state-inline">
-              <p>No hay productos agregados todavía.</p>
-            </div>
-          ) : (
-            <div className="table-wrap">
-              <table className="items-table">
-                <thead>
-                  <tr>
-                    <th>Producto</th>
-                    <th>Cant.</th>
-                    <th>Unitario</th>
-                    <th>Subtotal</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((item) => (
-                    <tr key={item.productId}>
-                      <td>{item.productName}</td>
-                      <td>{item.quantity}</td>
-                      <td>{formatCurrency(item.unitPrice)}</td>
-                      <td>{formatCurrency(item.subtotal)}</td>
-                      <td>
-                        <button
-                          className="icon-button"
-                          type="button"
-                          onClick={() => handleRemoveItem(item.productId)}
-                          aria-label={`Eliminar ${item.productName}`}
-                        >
-                          ×
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <div className="total-box">
-            <span>Total general</span>
-            <strong>{formatCurrency(total)}</strong>
-          </div>
-
-          <button className="button button-primary button-full" type="submit" form="sales-form">
-            Generar pedido
-          </button>
-        </aside>
-      </div>
-    </section>
   );
 }
 
@@ -1190,13 +865,11 @@ function ClientsView({ clients, orders, cobranzas, setCobranzas }) {
 }
 
 function App() {
+  const { session, loading, refreshSession } = useAuth();
   const [themeMode, setThemeMode] = useState(() => getInitialThemeMode());
   const [resolvedTheme, setResolvedTheme] = useState(() => getResolvedTheme(getInitialThemeMode()));
-  const [authenticated, setAuthenticated] = useState(() => getInitialAuth());
   const [activeView, setActiveView] = useState(() =>
-    getInitialAuth()
-      ? normalizeActiveView(readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.activeView, 'ventas'))
-      : 'ventas',
+    normalizeActiveView(readString(typeof window === 'undefined' ? null : window.sessionStorage, STORAGE_KEYS.activeView, 'ventas')),
   );
   const [orders, setOrders] = useState(() => loadOrders());
   const [products, setProducts] = useState(() => loadProducts());
@@ -1299,10 +972,10 @@ function App() {
   }, [erpCityRates]);
 
   useEffect(() => {
-    if (authenticated) {
+    if (session.authenticated) {
       writeString(window.sessionStorage, STORAGE_KEYS.activeView, activeView);
     }
-  }, [activeView, authenticated]);
+  }, [activeView, session.authenticated]);
 
   const handleThemeToggle = () => {
     setThemeMode((currentMode) => {
@@ -1314,25 +987,44 @@ function App() {
     });
   };
 
-  const handleLogin = () => {
-    writeString(window.sessionStorage, STORAGE_KEYS.auth, 'true');
+  const handleLogin = async (username, password) => {
+    const email = username.trim().toLowerCase() === 'admin' ? 'admin@thorena.cl' : username.includes('@') ? username : `${username}@thorena.local`;
+    let response = await authService.login(email, password);
+
+    if (!response.success) {
+      const signUpResponse = await authService.signUp(username || 'Usuario', email, password);
+      if (!signUpResponse.success) {
+        return false;
+      }
+      response = await authService.login(email, password);
+    }
+
+    if (!response.success) {
+      return false;
+    }
+
     writeString(window.sessionStorage, STORAGE_KEYS.activeView, 'ventas');
-    setAuthenticated(true);
     setActiveView('ventas');
+    await refreshSession();
+    return true;
   };
 
-  const handleLogout = () => {
-    removeItem(window.sessionStorage, STORAGE_KEYS.auth);
+  const handleLogout = async () => {
+    await authService.logout();
     removeItem(window.sessionStorage, STORAGE_KEYS.activeView);
-    setAuthenticated(false);
     setActiveView('ventas');
+    await refreshSession();
   };
 
   const handleViewChange = (view) => {
     setActiveView(view);
   };
 
-  if (!authenticated) {
+  if (loading) {
+    return <main className="auth-screen"><section className="auth-card panel"><p>Cargando sesion...</p></section></main>;
+  }
+
+  if (!session.authenticated) {
     return <LoginScreen onLogin={handleLogin} />;
   }
 

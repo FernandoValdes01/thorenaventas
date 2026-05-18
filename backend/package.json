@@ -12,12 +12,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.6.11",
     "@hono/node-server": "^1.13.7",
     "better-auth": "^1.1.16",
+    "dotenv": "^16.4.7",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.6.10",
     "pg": "^8.13.1",
-    "zod": "^3.23.8"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
