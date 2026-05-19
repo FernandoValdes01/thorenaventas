@@ -28,6 +28,7 @@ const TABS = [
   { id: 'ventas', label: 'Ventas' },
   { id: 'tarifas-ciudad', label: 'Tarifas por ciudad' },
   { id: 'proveedores', label: 'Proveedores' },
+  { id: 'promociones', label: 'Promociones' },
   { id: 'datos-thorena', label: 'Datos Thorena' },
 ];
 
@@ -89,7 +90,8 @@ const formatPercent = (value) => percentFormatter.format(clamp(asNumber(value, 0
 const formatInteger = (value) => integerFormatter.format(Math.round(Math.max(0, asNumber(value, 0))));
 
 const emptyClientForm = {
-  name: '',
+  businessName: '',
+  nickname: '',
   type: 'Negocio fijo',
   rut: '',
   contact: '',
@@ -310,6 +312,8 @@ function ERPView({
   setSuppliers,
   cityRates,
   setCityRates,
+  promotions,
+  onSavePromotions,
   companyInfo,
   onSaveCompanyInfo,
 }) {
@@ -322,6 +326,7 @@ function ERPView({
   const [productForm, setProductForm] = useState(emptyProductForm);
   const [saleForm, setSaleForm] = useState(emptySaleForm);
   const [cityRateForm, setCityRateForm] = useState(emptyCityRateForm);
+  const [promoForm, setPromoForm] = useState({ name: '', price: '0', status: 'Activo', components: [{ productId: '', quantity: '1' }] });
   const [companyForm, setCompanyForm] = useState(() => ({ ...emptyCompanyForm, ...(companyInfo || {}) }));
   const [editModal, setEditModal] = useState(null);
   const [editError, setEditError] = useState('');
@@ -511,9 +516,10 @@ function ERPView({
   const handleAddClient = async (event) => {
     event.preventDefault();
 
-    const name = normalizeText(clientForm.name);
-    if (!name) {
-      setFeedback({ type: 'error', text: 'Debes ingresar el nombre del cliente.' });
+    const businessName = normalizeText(clientForm.businessName);
+    const nickname = normalizeText(clientForm.nickname);
+    if (!businessName || !nickname) {
+      setFeedback({ type: 'error', text: 'Debes ingresar razon social y apodo del local.' });
       return;
     }
 
@@ -551,7 +557,9 @@ function ERPView({
     const newClient = {
       id: clientId,
       code: clientId,
-      name,
+      name: nickname,
+      businessName,
+      nickname,
       type: normalizeText(clientForm.type),
       rut,
       phone,
@@ -688,6 +696,21 @@ function ERPView({
   const handleDeleteScale = (id) => {
     volumeScalesService.remove(id);
     setScales((current) => current.filter((item) => item.id !== id));
+  };
+
+  const handleDeleteClient = async (id) => {
+    const target = clients.find((item) => item.id === id);
+    const clientLabel = target?.nickname || target?.name || target?.businessName || id;
+    const confirmed = window.confirm(`Eliminar cliente "${clientLabel}"? Esta accion no se puede deshacer.`);
+    if (!confirmed) return;
+
+    const result = await clientsService.remove(id);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo eliminar cliente: ${result.error.message}` });
+      return;
+    }
+    setClients((current) => current.filter((item) => item.id !== id));
+    setFeedback({ type: 'success', text: 'Cliente eliminado correctamente.' });
   };
 
   const handleAddPurchase = async (event) => {
@@ -1154,7 +1177,11 @@ function ERPView({
         : key === 'creditEnabled'
           ? value === 'true'
           : value;
-    clientsService.update(id, { [key]: backendValue });
+    if (key === 'nickname') {
+      clientsService.update(id, { nickname: normalizeText(value), name: normalizeText(value) });
+    } else {
+      clientsService.update(id, { [key]: backendValue });
+    }
 
     setClients((current) =>
       current.map((item) => {
@@ -1170,6 +1197,15 @@ function ERPView({
 
         if (key === 'creditEnabled') {
           return { ...item, creditEnabled: value === 'true' };
+        }
+
+        if (key === 'nickname') {
+          const nickname = normalizeText(value);
+          return { ...item, nickname, name: nickname };
+        }
+
+        if (key === 'businessName') {
+          return { ...item, businessName: normalizeText(value) };
         }
 
         return { ...item, [key]: value };
@@ -1280,6 +1316,44 @@ function ERPView({
         return { ...item, [key]: value };
       }),
     );
+  };
+
+  const handleDeletePurchase = async (id) => {
+    const target = purchases.find((item) => item.id === id);
+    const purchaseLabel = target?.purchaseOrder || target?.product || id;
+    const confirmed = window.confirm(`Eliminar compra "${purchaseLabel}"?`);
+    if (!confirmed) return;
+
+    const result = await purchasesService.remove(id);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo eliminar compra: ${result.error.message}` });
+      return;
+    }
+
+    const sku = String(target?.productSku || target?.sku || '');
+    const quantity = Math.max(0, Math.round(asNumber(target?.quantity, 0)));
+
+    setPurchases((current) => current.filter((item) => item.id !== id));
+    if (sku && quantity > 0) {
+      setProductsFull((current) => current.map((item) => (String(item.sku || '') === sku ? { ...item, stock: Math.max(0, asNumber(item.stock, 0) - quantity) } : item)));
+      setProducts((current) => current.map((item) => (String(item.id || item.sku || '') === sku ? { ...item, stock: Math.max(0, asNumber(item.stock, 0) - quantity) } : item)));
+    }
+    setFeedback({ type: 'success', text: 'Compra eliminada correctamente.' });
+  };
+
+  const handleDeleteSale = async (id) => {
+    const target = sales.find((item) => item.id === id);
+    const saleLabel = target?.orderCode || target?.product || id;
+    const confirmed = window.confirm(`Eliminar venta "${saleLabel}"?`);
+    if (!confirmed) return;
+
+    const result = await salesService.remove(id);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo eliminar venta: ${result.error.message}` });
+      return;
+    }
+    setSales((current) => current.filter((item) => item.id !== id));
+    setFeedback({ type: 'success', text: 'Venta eliminada correctamente.' });
   };
 
   const handleSupplierInlineChange = (id, key, value) => {
@@ -1441,6 +1515,74 @@ function ERPView({
     }
 
     setFeedback({ type: 'success', text: 'Datos Thorena actualizados para cotizaciones.' });
+  };
+
+  const updatePromoField = (key) => (event) => {
+    setPromoForm((current) => ({ ...current, [key]: event.target.value }));
+    setFeedback(null);
+  };
+
+  const updatePromoComponent = (index, key) => (event) => {
+    const value = event.target.value;
+    setPromoForm((current) => ({
+      ...current,
+      components: current.components.map((component, componentIndex) => (componentIndex === index ? { ...component, [key]: value } : component)),
+    }));
+  };
+
+  const addPromoComponentRow = () => {
+    setPromoForm((current) => ({ ...current, components: [...current.components, { productId: '', quantity: '1' }] }));
+  };
+
+  const removePromoComponentRow = (index) => {
+    setPromoForm((current) => ({ ...current, components: current.components.filter((_, componentIndex) => componentIndex !== index) }));
+  };
+
+  const handleAddPromotion = async (event) => {
+    event.preventDefault();
+    const name = normalizeText(promoForm.name);
+    const price = Math.max(0, Math.round(asNumber(promoForm.price, 0)));
+    const components = promoForm.components
+      .map((item) => ({ productId: item.productId, quantity: Math.max(1, Math.round(asNumber(item.quantity, 1))) }))
+      .filter((item) => item.productId);
+
+    if (!name) {
+      setFeedback({ type: 'error', text: 'Debes ingresar nombre de promocion.' });
+      return;
+    }
+    if (!components.length) {
+      setFeedback({ type: 'error', text: 'Agrega al menos un producto en la promocion.' });
+      return;
+    }
+
+    const nextPromotions = [
+      {
+        id: `promo-${Date.now()}`,
+        name,
+        price,
+        status: promoForm.status || 'Activo',
+        components,
+      },
+      ...(promotions || []),
+    ];
+
+    const result = onSavePromotions ? await onSavePromotions(nextPromotions) : { success: false, error: { message: 'No disponible' } };
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar promocion: ${result.error.message}` });
+      return;
+    }
+    setPromoForm({ name: '', price: '0', status: 'Activo', components: [{ productId: '', quantity: '1' }] });
+    setFeedback({ type: 'success', text: 'Promocion guardada.' });
+  };
+
+  const handleDeletePromotion = async (id) => {
+    const nextPromotions = (promotions || []).filter((item) => item.id !== id);
+    const result = onSavePromotions ? await onSavePromotions(nextPromotions) : { success: false, error: { message: 'No disponible' } };
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo eliminar promocion: ${result.error.message}` });
+      return;
+    }
+    setFeedback({ type: 'success', text: 'Promocion eliminada.' });
   };
 
   const openEditModal = (entity, id, draft) => {
@@ -1618,8 +1760,12 @@ function ERPView({
 
             <div className="form-grid">
               <label className="field field-wide">
-                <span>Nombre cliente</span>
-                <input value={clientForm.name} onChange={updateClientField('name')} placeholder="Ej: Almacen Don Pedro" />
+                <span>Razon Social del local</span>
+                <input value={clientForm.businessName} onChange={updateClientField('businessName')} placeholder="Ej: Comercial Don Pedro SpA" />
+              </label>
+              <label className="field field-wide">
+                <span>Apodo del local</span>
+                <input value={clientForm.nickname} onChange={updateClientField('nickname')} placeholder="Ej: Almacen Don Pedro" />
               </label>
               <label className="field">
                 <span>Tipo</span>
@@ -1743,7 +1889,8 @@ function ERPView({
                     <tr key={client.id}>
                       <td>{client.id}</td>
                       <td>
-                        <strong>{client.name || '-'}</strong>
+                        <strong>{client.businessName || '-'}</strong>
+                        <p className="muted">Apodo: {client.nickname || client.name || '-'}</p>
                         <div className="muted">{client.rut || '-'}</div>
                       </td>
                       <td>{client.type || '-'}</td>
@@ -1759,11 +1906,14 @@ function ERPView({
                       <td className="table-actions-col">
                         <div className="table-actions">
                           <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('client', client.id, {
-                            name: client.name || '', type: client.type || CLIENT_TYPES[0], status: client.status || 'Activo', rut: client.rut || '',
+                            businessName: client.businessName || client.name || '', nickname: client.nickname || client.name || '', type: client.type || CLIENT_TYPES[0], status: client.status || 'Activo', rut: client.rut || '',
                             zone: client.zone || '', sector: client.sector || '', contact: client.contact || '', phone: client.phone || '', email: client.email || '', debt: String(client.debt ?? 0),
                             monthlyTarget: String(client.monthlyTarget ?? 0), accumulatedSales: String(client.accumulatedSales ?? 0), goalProgress: String(client.goalProgress ?? 0),
                           })}>
                             Editar
+                          </button>
+                          <button className="button button-small button-danger" type="button" onClick={() => handleDeleteClient(client.id)}>
+                            Eliminar
                           </button>
                         </div>
                       </td>
@@ -2115,6 +2265,9 @@ function ERPView({
                             observation: purchase.observation || '',
                           })}>
                             Editar
+                          </button>
+                          <button className="button button-small button-danger" type="button" onClick={() => handleDeletePurchase(purchase.id)}>
+                            Eliminar
                           </button>
                         </div>
                       </td>
@@ -2482,6 +2635,9 @@ function ERPView({
                           })}>
                             Editar
                           </button>
+                          <button className="button button-small button-danger" type="button" onClick={() => handleDeleteSale(row.id)}>
+                            Eliminar
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -2617,6 +2773,57 @@ function ERPView({
         </div>
       ) : null}
 
+      {tab === 'promociones' ? (
+        <div className="erp-content-layout">
+          <form className="panel erp-form" onSubmit={handleAddPromotion}>
+            <div className="panel-title">
+              <h3>Nueva promocion</h3>
+              <p className="muted">Arma combos con multiples productos y precio fijo en CLP.</p>
+            </div>
+            <div className="form-grid">
+              <label className="field field-wide"><span>Nombre promo</span><input value={promoForm.name} onChange={updatePromoField('name')} placeholder="Ej: Promo Lena x3" /></label>
+              <label className="field"><span>Precio promo (CLP)</span><input type="number" min="0" step="1" value={promoForm.price} onChange={updatePromoField('price')} /></label>
+              <label className="field"><span>Estado</span><select value={promoForm.status} onChange={updatePromoField('status')}><option value="Activo">Activo</option><option value="Inactivo">Inactivo</option></select></label>
+              <div className="field field-wide">
+                <span>Componentes</span>
+                {promoForm.components.map((component, index) => (
+                  <div key={`promo-component-${index}`} className="table-actions" style={{ marginBottom: 8 }}>
+                    <select value={component.productId} onChange={updatePromoComponent(index, 'productId')}>
+                      <option value="">Selecciona producto</option>
+                      {productsFull.map((product) => <option key={product.sku || product.id} value={product.sku || product.id}>{product.product || product.name}</option>)}
+                    </select>
+                    <input type="number" min="1" step="1" value={component.quantity} onChange={updatePromoComponent(index, 'quantity')} />
+                    <button className="button button-small button-danger" type="button" onClick={() => removePromoComponentRow(index)}>Quitar</button>
+                  </div>
+                ))}
+                <button className="button button-small button-ghost" type="button" onClick={addPromoComponentRow}>Agregar producto</button>
+              </div>
+            </div>
+            <button className="button button-primary" type="submit">Guardar promocion</button>
+          </form>
+
+          <article className="panel erp-table-panel">
+            <div className="panel-title"><h3>Promociones</h3></div>
+            <div className="table-wrap">
+              <table className="erp-table erp-table-min-900">
+                <thead><tr><th>Nombre</th><th>Precio</th><th>Componentes</th><th>Estado</th><th className="table-actions-col">Acciones</th></tr></thead>
+                <tbody>
+                  {(promotions || []).map((promotion) => (
+                    <tr key={promotion.id}>
+                      <td>{promotion.name}</td>
+                      <td>{formatCurrency(promotion.price || 0)}</td>
+                      <td>{(promotion.components || []).map((component) => `${component.quantity}x ${(productsFull.find((product) => String(product.sku || product.id) === String(component.productId))?.product || component.productId)}`).join(', ')}</td>
+                      <td>{promotion.status || 'Activo'}</td>
+                      <td className="table-actions-col"><div className="table-actions"><button className="button button-small button-danger" type="button" onClick={() => handleDeletePromotion(promotion.id)}>Eliminar</button></div></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+      ) : null}
+
       {tab === 'datos-thorena' ? (
         <div className="erp-content-layout erp-content-layout-full">
           <form className="panel erp-form" onSubmit={handleSaveCompanyInfo}>
@@ -2672,7 +2879,8 @@ function ERPView({
             <div className="form-grid">
               {editModal.entity === 'client' ? (
                 <>
-                  <label className="field"><span>Nombre</span><input value={editModal.draft.name || ''} onChange={updateEditDraft('name')} /></label>
+                  <label className="field"><span>Razon Social</span><input value={editModal.draft.businessName || editModal.draft.name || ''} onChange={updateEditDraft('businessName')} /></label>
+                  <label className="field"><span>Apodo</span><input value={editModal.draft.nickname || editModal.draft.name || ''} onChange={updateEditDraft('nickname')} /></label>
                   <label className="field"><span>Tipo</span><select value={editModal.draft.type || CLIENT_TYPES[0]} onChange={updateEditDraft('type')}>{CLIENT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
                   <label className="field"><span>Estado</span><select value={editModal.draft.status || 'Activo'} onChange={updateEditDraft('status')}>{CLIENT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
                   <label className="field"><span>RUT (12345678-5)</span><input value={editModal.draft.rut || ''} onChange={updateEditDraft('rut')} placeholder="12345678-5" /></label>

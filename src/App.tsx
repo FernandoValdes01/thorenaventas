@@ -54,6 +54,7 @@ const STORAGE_KEYS = {
   erpProductsFull: 'thorena.erp-products-full',
   erpSuppliers: 'thorena.erp-suppliers',
   erpCityRates: 'thorena.erp-city-rates',
+  erpPromotions: 'thorena.erp-promotions',
   companyInfo: 'thorena.company-info',
 };
 
@@ -190,6 +191,10 @@ function normalizeItems(items) {
       const subtotalBeforeScale = Math.max(0, Number(item?.subtotalBeforeScale ?? unitPriceBeforeScale * quantity) || unitPriceBeforeScale * quantity);
       const subtotal = Math.max(0, Number(item?.subtotal ?? unitPrice * quantity) || unitPrice * quantity);
       const discountAmount = Math.max(0, Number(item?.discountAmount) || Math.max(0, subtotalBeforeScale - subtotal));
+      const customDiscountRate = Math.max(0, Number(item?.customDiscountRate) || 0);
+      const customDiscountAmount = Math.max(0, Number(item?.customDiscountAmount) || 0);
+      const itemKind = item?.itemKind === 'promotion' ? 'promotion' : 'product';
+      const promoComponents = Array.isArray(item?.promoComponents) ? item.promoComponents : [];
 
       if (!productName || !Number.isFinite(unitPrice)) {
         return null;
@@ -207,6 +212,10 @@ function normalizeItems(items) {
         volumeScaleLabel,
         subtotalBeforeScale,
         discountAmount,
+        customDiscountRate,
+        customDiscountAmount,
+        itemKind,
+        promoComponents,
         quantity,
         subtotal,
       };
@@ -991,6 +1000,7 @@ function App() {
   const [erpProductsFull, setErpProductsFull] = useState(() => loadErpModule(STORAGE_KEYS.erpProductsFull, ERP_PRODUCTS_FULL));
   const [erpSuppliers, setErpSuppliers] = useState(() => loadErpModule(STORAGE_KEYS.erpSuppliers, ERP_SUPPLIERS));
   const [erpCityRates, setErpCityRates] = useState(() => loadErpModule(STORAGE_KEYS.erpCityRates, ERP_CITY_RATES));
+  const [erpPromotions, setErpPromotions] = useState(() => loadErpModule(STORAGE_KEYS.erpPromotions, []));
   const [companyInfo, setCompanyInfo] = useState(() =>
     normalizeCompanyInfo(readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.companyInfo, COMPANY_INFO_DEFAULT)),
   );
@@ -1016,6 +1026,7 @@ function App() {
         productsFullRes,
         suppliersRes,
         cityRatesRes,
+        promotionsRes,
         companyInfoRes,
       ] = await Promise.all([
         ordersService.list(),
@@ -1029,6 +1040,7 @@ function App() {
         productsService.list(),
         suppliersService.list(),
         cityRatesService.list(),
+        stateService.get('erpPromotions'),
         stateService.get('companyInfo'),
       ]);
 
@@ -1047,6 +1059,7 @@ function App() {
       setErpProductsFull(productsFullRows);
       setErpSuppliers(responseArray(suppliersRes));
       setErpCityRates(responseArray(cityRatesRes));
+      setErpPromotions(Array.isArray(promotionsRes.success ? promotionsRes.data?.data : []) ? (promotionsRes.success ? promotionsRes.data?.data : []) : []);
       const persistedCompanyInfo = companyInfoRes.success ? companyInfoRes.data?.data : null;
       if (persistedCompanyInfo) {
         setCompanyInfo(normalizeCompanyInfo(persistedCompanyInfo));
@@ -1147,6 +1160,10 @@ function App() {
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.erpCityRates, erpCityRates);
   }, [erpCityRates]);
+
+  useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.erpPromotions, erpPromotions);
+  }, [erpPromotions]);
 
   useEffect(() => {
     writeJSON(window.localStorage, STORAGE_KEYS.companyInfo, companyInfo);
@@ -1273,6 +1290,7 @@ function App() {
             paymentMethods={ERP_PAYMENT_METHODS}
             volumeScales={erpScales}
             cityRates={erpCityRates}
+            promotions={erpPromotions}
             companyInfo={companyInfo}
           />
         ) : activeView === 'pedidos' ? (
@@ -1300,6 +1318,12 @@ function App() {
             setSuppliers={setErpSuppliers}
             cityRates={erpCityRates}
             setCityRates={setErpCityRates}
+            promotions={erpPromotions}
+            onSavePromotions={async (nextPromotions) => {
+              const response = await stateService.set('erpPromotions', nextPromotions);
+              if (response.success) setErpPromotions(nextPromotions);
+              return response;
+            }}
             companyInfo={companyInfo}
             onSaveCompanyInfo={handleSaveCompanyInfo}
           />

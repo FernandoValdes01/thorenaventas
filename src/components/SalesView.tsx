@@ -236,15 +236,18 @@ const getScaleByQuantity = (quantity, scales) => {
   return scales[scales.length - 1];
 };
 
-const buildPricedItem = (product, quantity, scales) => {
+const buildPricedItem = (product, quantity, scales, customDiscountRate = 0) => {
   const activeOffer = getActiveOffer(product);
   const unitPriceBeforeScale = getCurrentPrice(product);
   const appliedScale = getScaleByQuantity(quantity, scales);
   const volumeDiscountRate = Math.max(0, appliedScale.discountRate || 0);
   const unitPrice = roundMoney(unitPriceBeforeScale * (1 - volumeDiscountRate));
   const subtotalBeforeScale = roundMoney(unitPriceBeforeScale * quantity);
-  const subtotal = roundMoney(unitPrice * quantity);
-  const discountAmount = Math.max(0, subtotalBeforeScale - subtotal);
+  const subtotalAfterScale = roundMoney(unitPrice * quantity);
+  const customRate = Math.max(0, Math.min(0.95, Number(customDiscountRate) || 0));
+  const customDiscountAmount = roundMoney(subtotalAfterScale * customRate);
+  const subtotal = Math.max(0, subtotalAfterScale - customDiscountAmount);
+  const discountAmount = Math.max(0, subtotalBeforeScale - subtotalAfterScale);
 
   return {
     productId: product.id,
@@ -261,13 +264,19 @@ const buildPricedItem = (product, quantity, scales) => {
     volumeDiscountRate,
     volumeDiscountPercent: Math.round(volumeDiscountRate * 100),
     discountAmount,
+    customDiscountRate: customRate,
+    customDiscountPercent: Math.round(customRate * 100),
+    customDiscountAmount,
+    itemKind: 'product',
+    promoComponents: [],
   };
 };
 
-function SalesView({ products, setProducts, productsFull, setProductsFull, orders, setOrders, setSales, clients, paymentMethods, volumeScales, cityRates, companyInfo }) {
+function SalesView({ products, setProducts, productsFull, setProductsFull, orders, setOrders, setSales, clients, paymentMethods, volumeScales, cityRates, promotions, companyInfo }) {
   const [saleChannel, setSaleChannel] = useState('terreno');
   const [form, setForm] = useState(EMPTY_FORM);
   const [draft, setDraft] = useState(() => createInitialDraft(products));
+  const [orderDiscountRate, setOrderDiscountRate] = useState(0);
   const [items, setItems] = useState([]);
   const [feedback, setFeedback] = useState(null);
   const [errors, setErrors] = useState([]);
@@ -277,6 +286,14 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
 
   const normalizedScales = useMemo(() => normalizeScales(volumeScales), [volumeScales]);
   const availableProducts = useMemo(() => products.filter((product) => product.stock > 0), [products]);
+  const activePromotions = useMemo(() => (promotions || []).filter((promotion) => (promotion.status || 'Activo') === 'Activo'), [promotions]);
+  const availableOptions = useMemo(
+    () => [
+      ...availableProducts.map((product) => ({ id: product.id, label: buildProductOptionLabel(product), type: 'product', ref: product })),
+      ...activePromotions.map((promotion) => ({ id: `promo:${promotion.id}`, label: `${promotion.name} · ${formatMoney(promotion.price || 0)}`, type: 'promotion', ref: promotion })),
+    ],
+    [availableProducts, activePromotions],
+  );
   const availablePaymentMethods = useMemo(() => paymentMethods || [], [paymentMethods]);
   const normalizedCityRates = useMemo(
     () =>
@@ -322,11 +339,13 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
   );
   const itemsTotal = useMemo(() => items.reduce((sum, item) => sum + item.subtotal, 0), [items]);
   const totalDiscountAmount = useMemo(() => Math.max(0, subtotalBeforeDiscount - itemsTotal), [subtotalBeforeDiscount, itemsTotal]);
-  const dispatchSurcharge = useMemo(() => roundMoney(itemsTotal * dispatchRate), [itemsTotal, dispatchRate]);
-  const total = useMemo(() => itemsTotal + dispatchSurcharge, [itemsTotal, dispatchSurcharge]);
+  const orderDiscountAmount = useMemo(() => roundMoney(itemsTotal * Math.max(0, Math.min(0.95, orderDiscountRate))), [itemsTotal, orderDiscountRate]);
+  const itemsTotalAfterOrderDiscount = useMemo(() => Math.max(0, itemsTotal - orderDiscountAmount), [itemsTotal, orderDiscountAmount]);
+  const dispatchSurcharge = useMemo(() => roundMoney(itemsTotalAfterOrderDiscount * dispatchRate), [itemsTotalAfterOrderDiscount, dispatchRate]);
+  const total = useMemo(() => itemsTotalAfterOrderDiscount + dispatchSurcharge, [itemsTotalAfterOrderDiscount, dispatchSurcharge]);
 
   useEffect(() => {
-    if (!availableProducts.length) {
+    if (!availableOptions.length) {
       if (draft.productId) {
         setDraft((current) => ({ ...current, productId: '' }));
       }
@@ -334,10 +353,10 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
       return;
     }
 
-    if (!availableProducts.some((product) => product.id === draft.productId)) {
-      setDraft((current) => ({ ...current, productId: availableProducts[0].id }));
+    if (!availableOptions.some((option) => option.id === draft.productId)) {
+      setDraft((current) => ({ ...current, productId: availableOptions[0].id }));
     }
-  }, [availableProducts, draft.productId]);
+  }, [availableOptions, draft.productId]);
 
   useEffect(() => {
     if (!availablePaymentMethodsByChannel.length) {
@@ -373,15 +392,10 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
     setFeedback(null);
 
     const quantity = Number(draft.quantity);
-    const product = getProductById(products, draft.productId);
+    const selectedOption = availableOptions.find((option) => option.id === draft.productId);
 
-    if (!product) {
+    if (!selectedOption) {
       setErrors(['Selecciona un producto disponible.']);
-      return;
-    }
-
-    if (product.stock <= 0) {
-      setErrors(['Ese producto no tiene stock disponible.']);
       return;
     }
 
@@ -393,18 +407,60 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
     setErrors([]);
 
     setItems((current) => {
-      const existing = current.find((item) => item.productId === product.id);
+      const existing = current.find((item) => item.productId === selectedOption.id);
       const nextQuantity = (existing?.quantity || 0) + quantity;
+      let pricedItem;
 
-      if (nextQuantity > product.stock) {
-        setErrors([`Solo hay ${product.stock} unidades disponibles de ${product.name}.`]);
-        return current;
+      if (selectedOption.type === 'promotion') {
+        const promotion = selectedOption.ref;
+        const productMap = new Map(products.map((product) => [String(product.id), product]));
+        const maxPromoByStock = (promotion.components || []).reduce((min, component) => {
+          const product = productMap.get(String(component.productId));
+          if (!product) return 0;
+          const perPromo = Math.max(1, Number(component.quantity) || 1);
+          const available = Math.floor((Number(product.stock) || 0) / perPromo);
+          return Math.min(min, available);
+        }, Number.POSITIVE_INFINITY);
+        if (nextQuantity > maxPromoByStock) {
+          setErrors([`Stock insuficiente para promo ${promotion.name}. Disponibles: ${Math.max(0, maxPromoByStock)}.`]);
+          return current;
+        }
+        pricedItem = {
+          productId: selectedOption.id,
+          productName: promotion.name,
+          quantity: nextQuantity,
+          basePrice: Math.max(0, Number(promotion.price) || 0),
+          offerDiscountPercent: 0,
+          unitPriceBeforeScale: Math.max(0, Number(promotion.price) || 0),
+          unitPrice: Math.max(0, Number(promotion.price) || 0),
+          subtotalBeforeScale: roundMoney((Number(promotion.price) || 0) * nextQuantity),
+          subtotal: roundMoney((Number(promotion.price) || 0) * nextQuantity),
+          volumeScaleId: 'promo',
+          volumeScaleLabel: 'Promocion',
+          volumeDiscountRate: 0,
+          volumeDiscountPercent: 0,
+          discountAmount: 0,
+          customDiscountRate: 0,
+          customDiscountPercent: 0,
+          customDiscountAmount: 0,
+          itemKind: 'promotion',
+          promoComponents: (promotion.components || []).map((component) => ({ productId: component.productId, quantity: Math.max(1, Number(component.quantity) || 1) })),
+        };
+      } else {
+        const product = selectedOption.ref;
+        if (product.stock <= 0) {
+          setErrors(['Ese producto no tiene stock disponible.']);
+          return current;
+        }
+        if (nextQuantity > product.stock) {
+          setErrors([`Solo hay ${product.stock} unidades disponibles de ${product.name}.`]);
+          return current;
+        }
+        pricedItem = buildPricedItem(product, nextQuantity, normalizedScales, existing?.customDiscountRate || 0);
       }
 
-      const pricedItem = buildPricedItem(product, nextQuantity, normalizedScales);
-
       if (existing) {
-        return current.map((item) => (item.productId === product.id ? pricedItem : item));
+        return current.map((item) => (item.productId === selectedOption.id ? pricedItem : item));
       }
 
       return [...current, pricedItem];
@@ -415,6 +471,30 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
 
   const handleRemoveItem = (productId) => {
     setItems((current) => current.filter((item) => item.productId !== productId));
+  };
+
+  const handleItemDiscountChange = (productId, percentValue) => {
+    const nextRate = Math.max(0, Math.min(95, Number(percentValue) || 0)) / 100;
+    setItems((current) =>
+      current.map((item) => {
+        if (item.productId !== productId) return item;
+        if (item.itemKind === 'promotion') {
+          const subtotalBefore = roundMoney(item.unitPrice * item.quantity);
+          const customDiscountAmount = roundMoney(subtotalBefore * nextRate);
+          return {
+            ...item,
+            subtotalBeforeScale: subtotalBefore,
+            customDiscountRate: nextRate,
+            customDiscountPercent: Math.round(nextRate * 100),
+            customDiscountAmount,
+            subtotal: Math.max(0, subtotalBefore - customDiscountAmount),
+          };
+        }
+        const product = getProductById(products, item.productId);
+        if (!product) return item;
+        return buildPricedItem(product, item.quantity, normalizedScales, nextRate);
+      }),
+    );
   };
 
   const buildDraftPayload = ({ status, includeCode = false }) => ({
@@ -448,9 +528,11 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
     dispatchCity: selectedCity,
     dispatchRate,
     dispatchSurcharge,
+    customDiscountRate: orderDiscountRate,
+    customDiscountAmount: orderDiscountAmount,
     itemsTotal,
     total,
-    items,
+    items: items.map((item) => ({ ...item })),
   });
 
   const buildOrderPayload = (status) => buildDraftPayload({ status, includeCode: true });
@@ -854,32 +936,40 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
 
     setProducts((current) =>
       current.map((product) => {
-        const soldItem = items.find((item) => item.productId === product.id);
-
-        if (!soldItem) {
-          return product;
-        }
-
-        return {
-          ...product,
-          stock: Math.max(0, product.stock - soldItem.quantity),
-        };
+        let delta = 0;
+        items.forEach((item) => {
+          if (item.itemKind === 'promotion') {
+            (item.promoComponents || []).forEach((component) => {
+              if (String(component.productId) === String(product.id)) {
+                delta += Math.max(1, Number(component.quantity) || 1) * item.quantity;
+              }
+            });
+          } else if (item.productId === product.id) {
+            delta += item.quantity;
+          }
+        });
+        if (delta <= 0) return product;
+        return { ...product, stock: Math.max(0, product.stock - delta) };
       }),
     );
 
     if (setProductsFull) {
       setProductsFull((current) =>
         current.map((product) => {
-          const soldItem = items.find((item) => item.productId === product.id || item.productId === product.sku);
-
-          if (!soldItem) {
-            return product;
-          }
-
-          return {
-            ...product,
-            stock: Math.max(0, Number(product.stock) - soldItem.quantity),
-          };
+          let delta = 0;
+          items.forEach((item) => {
+            if (item.itemKind === 'promotion') {
+              (item.promoComponents || []).forEach((component) => {
+                if (String(component.productId) === String(product.id || product.sku)) {
+                  delta += Math.max(1, Number(component.quantity) || 1) * item.quantity;
+                }
+              });
+            } else if (item.productId === product.id || item.productId === product.sku) {
+              delta += item.quantity;
+            }
+          });
+          if (delta <= 0) return product;
+          return { ...product, stock: Math.max(0, Number(product.stock) - delta) };
         }),
       );
     }
@@ -1017,9 +1107,9 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
               <span>Producto</span>
               <select value={draft.productId} onChange={handleDraftChange('productId')}>
                 <option value="">Selecciona un producto</option>
-                {availableProducts.map((product) => (
-                  <option key={product.id} value={product.id}>
-                    {buildProductOptionLabel(product)}
+                {availableOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
                   </option>
                 ))}
               </select>
@@ -1037,7 +1127,7 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
               />
             </label>
 
-            <button className="button button-secondary add-button" type="button" onClick={handleAddProduct} disabled={!availableProducts.length}>
+            <button className="button button-secondary add-button" type="button" onClick={handleAddProduct} disabled={!availableOptions.length}>
               Agregar producto
             </button>
           </div>
@@ -1061,6 +1151,7 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
                     <th>Producto</th>
                     <th>Cant.</th>
                     <th>Escala</th>
+                    <th>Desc. %</th>
                     <th>Unitario</th>
                     <th>Subtotal</th>
                     <th />
@@ -1087,6 +1178,9 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
                       <td>{item.quantity}</td>
                       <td>
                         {item.volumeScaleLabel} ({formatRate(item.volumeDiscountRate)})
+                      </td>
+                      <td>
+                        <input type="number" min="0" max="95" step="1" value={Math.round((item.customDiscountRate || 0) * 100)} onChange={(event) => handleItemDiscountChange(item.productId, event.target.value)} style={{ width: 72 }} />
                       </td>
                       <td>
                         {item.unitPriceBeforeScale > item.unitPrice ? <span className="strike-price">{formatMoney(item.unitPriceBeforeScale)}</span> : null}
@@ -1116,6 +1210,11 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
               <p className="muted">
                 Tarifa ciudad ({Math.round(dispatchRate * 100)}%): {formatMoney(dispatchSurcharge)}
               </p>
+              <p className="muted">Descuento total boleta ({Math.round(orderDiscountRate * 100)}%): -{formatMoney(orderDiscountAmount)}</p>
+              <label className="field" style={{ marginTop: 8 }}>
+                <span>Descuento total boleta (%)</span>
+                <input type="number" min="0" max="95" step="1" value={Math.round(orderDiscountRate * 100)} onChange={(event) => setOrderDiscountRate(Math.max(0, Math.min(95, Number(event.target.value) || 0)) / 100)} />
+              </label>
             </div>
             <strong>{formatMoney(total)}</strong>
           </div>

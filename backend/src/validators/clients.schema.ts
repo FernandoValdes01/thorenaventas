@@ -3,6 +3,8 @@ import { z } from 'zod';
 export const clientBodySchema = z.object({
   code: z.string().min(1).optional(),
   name: z.string().min(1),
+  businessName: z.string().default(''),
+  nickname: z.string().default(''),
   type: z.string().min(1),
   rut: z.string().default(''),
   phone: z.string().default(''),

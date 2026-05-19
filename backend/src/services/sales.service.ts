@@ -108,4 +108,9 @@ export const salesService = {
     const row = await db.update(sales).set(values).where(eq(sales.id, id)).returning();
     return row[0] ? toSale(row[0]) : null;
   },
+
+  async remove(id: string) {
+    await db.delete(sales).where(eq(sales.id, id));
+    return { deleted: true, id };
+  },
 };

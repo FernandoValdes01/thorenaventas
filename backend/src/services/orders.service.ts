@@ -24,6 +24,10 @@ type OrderItemPayload = {
   volumeDiscountPercent?: number;
   subtotalBeforeScale?: number;
   discountAmount?: number;
+  customDiscountRate?: number;
+  customDiscountAmount?: number;
+  itemKind?: 'product' | 'promotion';
+  promoComponents?: Array<{ productId: string; quantity: number }>;
   subtotal: number;
 };
 
@@ -45,6 +49,8 @@ type OrderPayload = {
   dispatchCity?: string;
   dispatchRate?: number;
   dispatchSurcharge?: number;
+  customDiscountRate?: number;
+  customDiscountAmount?: number;
   total?: number;
   observations?: string;
   sellerName?: string;
@@ -97,6 +103,8 @@ function toOrder(row: typeof orders.$inferSelect, items: Array<typeof orderItems
     dispatchCity: row.dispatchCity,
     dispatchRate: numberValue(row.dispatchRate),
     dispatchSurcharge: numberValue(row.dispatchSurcharge),
+    customDiscountRate: numberValue((row as any).customDiscountRate),
+    customDiscountAmount: numberValue((row as any).customDiscountAmount),
     total: numberValue(row.total),
     clientSnapshot: {
       id: row.clientId || '',
@@ -123,6 +131,16 @@ function toOrder(row: typeof orders.$inferSelect, items: Array<typeof orderItems
       volumeDiscountPercent: numberValue(item.volumeDiscountPercent),
       subtotalBeforeScale: numberValue(item.subtotalBeforeScale) || numberValue(item.subtotal),
       discountAmount: numberValue(item.discountAmount),
+      customDiscountRate: numberValue(item.customDiscountRate),
+      customDiscountAmount: numberValue(item.customDiscountAmount),
+      itemKind: item.itemKind || 'product',
+      promoComponents: (() => {
+        try {
+          return JSON.parse(item.promoComponents || '[]');
+        } catch {
+          return [];
+        }
+      })(),
       subtotal: numberValue(item.subtotal),
     })),
   };
@@ -258,6 +276,8 @@ export const ordersService = {
           dispatchCity: normalizeText(payload.dispatchCity || ''),
           dispatchRate: String(Math.max(0, Number(payload.dispatchRate) || 0)),
           dispatchSurcharge: String(Math.max(0, Number(payload.dispatchSurcharge) || 0)),
+          customDiscountRate: String(Math.max(0, Number(payload.customDiscountRate) || 0)),
+          customDiscountAmount: String(Math.max(0, Number(payload.customDiscountAmount) || 0)),
           total: String(Math.max(0, Number(payload.total) || 0)),
           observations: normalizeText(payload.observations || ''),
           showReceipt: Boolean(payload.showReceipt),
@@ -268,29 +288,52 @@ export const ordersService = {
 
       const insertedItems: Array<typeof orderItems.$inferSelect> = [];
       for (const item of payload.items) {
-        const productRow = await tx
-          .select()
-          .from(products)
-          .where(isUuid(item.productId) ? or(eq(products.id, item.productId), eq(products.sku, item.productId)) : eq(products.sku, item.productId))
-          .limit(1);
-        const product = productRow[0];
-        if (!product) throw new Error(`Producto no existe para ${item.productName}`);
-
         const quantity = Math.max(1, Math.round(Number(item.quantity) || 1));
-        if ((Number(product.stock) || 0) < quantity) {
-          throw new Error(`Stock insuficiente para ${product.name}`);
-        }
+        let persistedProductId = '';
 
-        await tx
-          .update(products)
-          .set({ stock: Math.max(0, (Number(product.stock) || 0) - quantity), updatedAt: sql`now()` })
-          .where(eq(products.id, product.id));
+        if ((item.itemKind || 'product') === 'promotion') {
+          const components = Array.isArray(item.promoComponents) ? item.promoComponents : [];
+          for (const component of components) {
+            const unitQty = Math.max(1, Math.round(Number(component.quantity) || 1));
+            const required = unitQty * quantity;
+            const productRow = await tx
+              .select()
+              .from(products)
+              .where(isUuid(component.productId) ? or(eq(products.id, component.productId), eq(products.sku, component.productId)) : eq(products.sku, component.productId))
+              .limit(1);
+            const product = productRow[0];
+            if (!product) throw new Error(`Producto de promo no existe para ${item.productName}`);
+            if ((Number(product.stock) || 0) < required) throw new Error(`Stock insuficiente para ${product.name}`);
+            await tx
+              .update(products)
+              .set({ stock: Math.max(0, (Number(product.stock) || 0) - required), updatedAt: sql`now()` })
+              .where(eq(products.id, product.id));
+            if (!persistedProductId) persistedProductId = product.id;
+          }
+        } else {
+          const productRow = await tx
+            .select()
+            .from(products)
+            .where(isUuid(item.productId) ? or(eq(products.id, item.productId), eq(products.sku, item.productId)) : eq(products.sku, item.productId))
+            .limit(1);
+          const product = productRow[0];
+          if (!product) throw new Error(`Producto no existe para ${item.productName}`);
+          if ((Number(product.stock) || 0) < quantity) {
+            throw new Error(`Stock insuficiente para ${product.name}`);
+          }
+
+          await tx
+            .update(products)
+            .set({ stock: Math.max(0, (Number(product.stock) || 0) - quantity), updatedAt: sql`now()` })
+            .where(eq(products.id, product.id));
+          persistedProductId = product.id;
+        }
 
         const row = await tx
           .insert(orderItems)
           .values({
             orderId: insertedOrder[0].id,
-            productId: product.id,
+            productId: persistedProductId || null,
             productNameSnapshot: item.productName,
             quantity,
             basePrice: String(Math.max(0, Number(item.basePrice) || 0)),
@@ -303,6 +346,10 @@ export const ordersService = {
             volumeDiscountPercent: String(Math.max(0, Number(item.volumeDiscountPercent) || 0)),
             subtotalBeforeScale: String(Math.max(0, Number(item.subtotalBeforeScale) || Number(item.subtotal) || 0)),
             discountAmount: String(Math.max(0, Number(item.discountAmount) || 0)),
+            customDiscountRate: String(Math.max(0, Number(item.customDiscountRate) || 0)),
+            customDiscountAmount: String(Math.max(0, Number(item.customDiscountAmount) || 0)),
+            itemKind: item.itemKind || 'product',
+            promoComponents: JSON.stringify(Array.isArray(item.promoComponents) ? item.promoComponents : []),
             subtotal: String(Math.max(0, Number(item.subtotal) || 0)),
           })
           .returning();

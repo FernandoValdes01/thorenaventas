@@ -241,4 +241,26 @@ export const purchasesService = {
       return updated[0] ? { updated: true, id } : null;
     });
   },
+
+  remove: async (id: string) => {
+    return db.transaction(async (tx) => {
+      const currentRow = await tx.select().from(purchases).where(eq(purchases.id, id)).limit(1);
+      const current = currentRow[0];
+      if (!current) return { deleted: false, id };
+
+      if (current.productId) {
+        const productRow = await tx.select({ stock: products.stock }).from(products).where(eq(products.id, current.productId)).limit(1);
+        const product = productRow[0];
+        if (product) {
+          await tx
+            .update(products)
+            .set({ stock: Math.max(0, (Number(product.stock) || 0) - Math.max(1, current.quantity)), updatedAt: sql`now()` })
+            .where(eq(products.id, current.productId));
+        }
+      }
+
+      await tx.delete(purchases).where(eq(purchases.id, id));
+      return { deleted: true, id };
+    });
+  },
 };

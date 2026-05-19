@@ -16,6 +16,8 @@ import {
 type ClientPayload = {
   code?: string;
   name?: string;
+  businessName?: string;
+  nickname?: string;
   type?: string;
   rut?: string;
   phone?: string;
@@ -56,7 +58,9 @@ function toClient(row: typeof clients.$inferSelect) {
   return {
     id: row.id,
     code: row.code,
-    name: row.name,
+    name: row.nickname || row.name,
+    businessName: row.businessName || row.name,
+    nickname: row.nickname || row.name,
     type: row.type,
     rut: row.rut,
     phone: row.phone,
@@ -93,9 +97,14 @@ function clientValues(payload: ClientPayload) {
   if (!validatePhone(whatsapp)) throw new AppError('VALIDATION_ERROR', 'WhatsApp invalido. Usa formato chileno +56...', 400);
   if (!validateEmail(email)) throw new AppError('VALIDATION_ERROR', 'Correo invalido.', 400);
 
+  const businessName = normalizeText(payload.businessName || payload.name || '');
+  const nickname = normalizeText(payload.nickname || payload.name || payload.businessName || '');
+
   return {
     code: String(payload.code || `CLI-${Date.now().toString().slice(-6)}`),
-    name: normalizeText(payload.name || ''),
+    name: nickname,
+    businessName,
+    nickname,
     type: normalizeText(payload.type || 'Negocio fijo'),
     rut,
     phone,
@@ -124,6 +133,12 @@ function updateValues(payload: ClientPayload) {
   const values: Partial<typeof clients.$inferInsert> = { updatedAt: sql`now()` as unknown as Date };
   if (payload.code !== undefined) values.code = normalizeText(payload.code);
   if (payload.name !== undefined) values.name = normalizeText(payload.name);
+  if (payload.businessName !== undefined) values.businessName = normalizeText(payload.businessName);
+  if (payload.nickname !== undefined) {
+    const nickname = normalizeText(payload.nickname);
+    values.nickname = nickname;
+    values.name = nickname;
+  }
   if (payload.type !== undefined) values.type = normalizeText(payload.type);
   if (payload.rut !== undefined) {
     const rut = normalizeRut(payload.rut);

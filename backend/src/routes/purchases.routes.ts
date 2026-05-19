@@ -28,4 +28,5 @@ export const purchasesRoutes = new Hono()
     }
 
     return ok(c, await purchasesService.update(c.req.param('id'), parsed.data));
-  });
+  })
+  .delete('/:id', async (c) => ok(c, await purchasesService.remove(c.req.param('id'))));

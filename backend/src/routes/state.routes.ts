@@ -14,6 +14,7 @@ const allowedKeys = new Set([
   'erpProductsFull',
   'erpSuppliers',
   'erpCityRates',
+  'erpPromotions',
   'companyInfo',
 ]);
 
