@@ -10,6 +10,7 @@ import {
 import { ERP_CLIENTS, ERP_PAYMENT_METHODS, ERP_PRODUCTS } from './data/erpSeed';
 import { ERP_COBRANZAS } from './data/erpCobranzas';
 import { ERP_CLIENT_LAST_PURCHASE } from './data/erpClientLastPurchase';
+import { COMPANY_INFO as COMPANY_INFO_DEFAULT } from './data/companyInfo';
 import ERP_VOLUME_SCALES from './data/erpScales.json';
 import {
   ERP_PRODUCTS_FULL,
@@ -37,6 +38,7 @@ import { routesService } from './services/routes.service';
 import { volumeScalesService } from './services/volume-scales.service';
 import { cityRatesService } from './services/city-rates.service';
 import { cobranzasService } from './services/cobranzas.service';
+import { stateService } from './services/state.service';
 
 const STORAGE_KEYS = {
   themeMode: 'thorena.theme-mode',
@@ -52,6 +54,7 @@ const STORAGE_KEYS = {
   erpProductsFull: 'thorena.erp-products-full',
   erpSuppliers: 'thorena.erp-suppliers',
   erpCityRates: 'thorena.erp-city-rates',
+  companyInfo: 'thorena.company-info',
 };
 
 const ERP_ORDER_STATUSES = ['Cotizado', 'Pedido', 'Preparando', 'Despachado', 'Pendiente de pago', 'Pagado', 'Anulado'];
@@ -93,6 +96,17 @@ function normalizeNameKey(value) {
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
     .trim();
+}
+
+function normalizeCompanyInfo(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    name: String(source.name || COMPANY_INFO_DEFAULT.name).trim(),
+    address: String(source.address || COMPANY_INFO_DEFAULT.address).trim(),
+    rut: String(source.rut || COMPANY_INFO_DEFAULT.rut).trim(),
+    phone: String(source.phone || COMPANY_INFO_DEFAULT.phone).trim(),
+    email: String(source.email || COMPANY_INFO_DEFAULT.email).trim(),
+  };
 }
 
 function excelSerialToISO(value) {
@@ -977,6 +991,9 @@ function App() {
   const [erpProductsFull, setErpProductsFull] = useState(() => loadErpModule(STORAGE_KEYS.erpProductsFull, ERP_PRODUCTS_FULL));
   const [erpSuppliers, setErpSuppliers] = useState(() => loadErpModule(STORAGE_KEYS.erpSuppliers, ERP_SUPPLIERS));
   const [erpCityRates, setErpCityRates] = useState(() => loadErpModule(STORAGE_KEYS.erpCityRates, ERP_CITY_RATES));
+  const [companyInfo, setCompanyInfo] = useState(() =>
+    normalizeCompanyInfo(readJSON(typeof window === 'undefined' ? null : window.localStorage, STORAGE_KEYS.companyInfo, COMPANY_INFO_DEFAULT)),
+  );
 
   useEffect(() => {
     if (!session.authenticated) {
@@ -999,6 +1016,7 @@ function App() {
         productsFullRes,
         suppliersRes,
         cityRatesRes,
+        companyInfoRes,
       ] = await Promise.all([
         ordersService.list(),
         productsService.list(),
@@ -1011,6 +1029,7 @@ function App() {
         productsService.list(),
         suppliersService.list(),
         cityRatesService.list(),
+        stateService.get('companyInfo'),
       ]);
 
       if (cancelled) return;
@@ -1028,6 +1047,10 @@ function App() {
       setErpProductsFull(productsFullRows);
       setErpSuppliers(responseArray(suppliersRes));
       setErpCityRates(responseArray(cityRatesRes));
+      const persistedCompanyInfo = companyInfoRes.success ? companyInfoRes.data?.data : null;
+      if (persistedCompanyInfo) {
+        setCompanyInfo(normalizeCompanyInfo(persistedCompanyInfo));
+      }
 
       setStateHydrated(true);
     };
@@ -1126,6 +1149,10 @@ function App() {
   }, [erpCityRates]);
 
   useEffect(() => {
+    writeJSON(window.localStorage, STORAGE_KEYS.companyInfo, companyInfo);
+  }, [companyInfo]);
+
+  useEffect(() => {
     if (session.authenticated) {
       writeString(window.sessionStorage, STORAGE_KEYS.activeView, activeView);
     }
@@ -1172,6 +1199,15 @@ function App() {
 
   const handleViewChange = (view) => {
     setActiveView(view);
+  };
+
+  const handleSaveCompanyInfo = async (nextInfo) => {
+    const normalized = normalizeCompanyInfo(nextInfo);
+    const response = await stateService.set('companyInfo', normalized);
+    if (response.success) {
+      setCompanyInfo(normalized);
+    }
+    return response;
   };
 
   const inventoryProducts = useMemo(() => {
@@ -1237,6 +1273,7 @@ function App() {
             paymentMethods={ERP_PAYMENT_METHODS}
             volumeScales={erpScales}
             cityRates={erpCityRates}
+            companyInfo={companyInfo}
           />
         ) : activeView === 'pedidos' ? (
           <OrdersView orders={orders} setOrders={setOrders} sales={erpSales} setSales={setErpSales} productsFull={erpProductsFull} />
@@ -1263,6 +1300,8 @@ function App() {
             setSuppliers={setErpSuppliers}
             cityRates={erpCityRates}
             setCityRates={setErpCityRates}
+            companyInfo={companyInfo}
+            onSaveCompanyInfo={handleSaveCompanyInfo}
           />
         ) : (
           <ProductsView products={inventoryProducts} setProducts={setProducts} />

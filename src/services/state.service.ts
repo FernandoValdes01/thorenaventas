@@ -11,7 +11,8 @@ export type StateKey =
   | 'erpSales'
   | 'erpProductsFull'
   | 'erpSuppliers'
-  | 'erpCityRates';
+  | 'erpCityRates'
+  | 'companyInfo';
 
 export const stateService = {
   get: <T>(key: StateKey) => api.get<{ key: StateKey; data: T | null }>(`/api/v1/state/${key}`),

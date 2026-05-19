@@ -64,7 +64,7 @@ function toPurchase(row: {
     productId: row.productId || '',
     productSku: row.productSku || '',
     sku: row.productSku || '',
-    product: row.product || '',
+    product: row.product || '[Producto Eliminado]',
     date: dateInput(row.date),
     purchaseOrder: row.purchaseOrder,
     quantity: row.quantity,

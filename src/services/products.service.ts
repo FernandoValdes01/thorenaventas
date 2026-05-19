@@ -6,4 +6,5 @@ export const productsService = {
   getById: (id: string) => api.get<Product>(`/api/v1/products/${id}`),
   createWithInitialPurchase: (payload: unknown) => api.post('/api/v1/products', payload),
   update: (id: string, payload: unknown) => api.patch<Product>(`/api/v1/products/${id}`, payload),
+  remove: (id: string) => api.delete<{ deleted: boolean; id: string }>(`/api/v1/products/${id}`),
 };

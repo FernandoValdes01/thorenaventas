@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { COMPANY_INFO } from '../data/companyInfo';
 import { DEFAULT_SELLER, logo as logoUrl } from '../data/appData';
 import { buildProductOptionLabel, getActiveOffer, getCurrentPrice } from '../lib/catalog';
 import { ordersService } from '../services/orders.service';
+
+const DEFAULT_COMPANY_INFO = {
+  name: 'Thorena Comercial',
+  address: 'Luis Advis 1415, Villarrica, Chile',
+  rut: '76.123.456-7',
+  phone: '+56 9 7479 7740',
+  email: 'thorenatravel@gmail.com',
+};
 
 const EMPTY_FORM = {
   clientId: '',
@@ -257,7 +264,7 @@ const buildPricedItem = (product, quantity, scales) => {
   };
 };
 
-function SalesView({ products, setProducts, productsFull, setProductsFull, orders, setOrders, setSales, clients, paymentMethods, volumeScales, cityRates }) {
+function SalesView({ products, setProducts, productsFull, setProductsFull, orders, setOrders, setSales, clients, paymentMethods, volumeScales, cityRates, companyInfo }) {
   const [saleChannel, setSaleChannel] = useState('terreno');
   const [form, setForm] = useState(EMPTY_FORM);
   const [draft, setDraft] = useState(() => createInitialDraft(products));
@@ -266,6 +273,7 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
   const [errors, setErrors] = useState([]);
   const [downloadingQuote, setDownloadingQuote] = useState(false);
   const [loadingQuote, setLoadingQuote] = useState(false);
+  const company = useMemo(() => ({ ...DEFAULT_COMPANY_INFO, ...(companyInfo || {}) }), [companyInfo]);
 
   const normalizedScales = useMemo(() => normalizeScales(volumeScales), [volumeScales]);
   const availableProducts = useMemo(() => products.filter((product) => product.stock > 0), [products]);
@@ -588,11 +596,11 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
         height: cardHeight,
         title: '1. Datos de Thorena',
         rows: [
-          ['Nombre', COMPANY_INFO.name],
-          ['Dirección', COMPANY_INFO.address],
-          ['RUT', COMPANY_INFO.rut],
-          ['Teléfono', COMPANY_INFO.phone],
-          ['Correo', COMPANY_INFO.email],
+          ['Nombre', company.name],
+          ['Dirección', company.address],
+          ['RUT', company.rut],
+          ['Teléfono', company.phone],
+          ['Correo', company.email],
         ],
       });
 
@@ -777,7 +785,7 @@ function SalesView({ products, setProducts, productsFull, setProductsFull, order
       });
 
       pdf.text(
-        `${COMPANY_INFO.email}  |  ${COMPANY_INFO.phone}  |  ${COMPANY_INFO.address}`,
+        `${company.email}  |  ${company.phone}  |  ${company.address}`,
         pageWidth / 2,
         footerY + 3.8,
         { align: 'center' },

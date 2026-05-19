@@ -14,6 +14,7 @@ const allowedKeys = new Set([
   'erpProductsFull',
   'erpSuppliers',
   'erpCityRates',
+  'companyInfo',
 ]);
 
 export const stateRoutes = new Hono()

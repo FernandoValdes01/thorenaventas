@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { clientsService } from '../services/clients.service';
 import { routesService } from '../services/routes.service';
 import { volumeScalesService } from '../services/volume-scales.service';
@@ -28,6 +28,7 @@ const TABS = [
   { id: 'ventas', label: 'Ventas' },
   { id: 'tarifas-ciudad', label: 'Tarifas por ciudad' },
   { id: 'proveedores', label: 'Proveedores' },
+  { id: 'datos-thorena', label: 'Datos Thorena' },
 ];
 
 const CLIENT_TYPES = [
@@ -193,6 +194,14 @@ const emptyCityRateForm = {
   rate: '0',
 };
 
+const emptyCompanyForm = {
+  name: '',
+  address: '',
+  rut: '',
+  phone: '',
+  email: '',
+};
+
 function ChartBars({ items, valueFormat = formatCurrency }) {
   const maxValue = Math.max(1, ...items.map((item) => asNumber(item.value, 0)));
 
@@ -301,6 +310,8 @@ function ERPView({
   setSuppliers,
   cityRates,
   setCityRates,
+  companyInfo,
+  onSaveCompanyInfo,
 }) {
   const [tab, setTab] = useState('dashboard');
   const [feedback, setFeedback] = useState(null);
@@ -311,8 +322,13 @@ function ERPView({
   const [productForm, setProductForm] = useState(emptyProductForm);
   const [saleForm, setSaleForm] = useState(emptySaleForm);
   const [cityRateForm, setCityRateForm] = useState(emptyCityRateForm);
+  const [companyForm, setCompanyForm] = useState(() => ({ ...emptyCompanyForm, ...(companyInfo || {}) }));
   const [editModal, setEditModal] = useState(null);
   const [editError, setEditError] = useState('');
+
+  useEffect(() => {
+    setCompanyForm({ ...emptyCompanyForm, ...(companyInfo || {}) });
+  }, [companyInfo]);
 
   const currentMonth = useMemo(() => new Date().toISOString().slice(0, 7), []);
 
@@ -478,6 +494,11 @@ function ERPView({
 
   const updateCityRateField = (key) => (event) => {
     setCityRateForm((current) => ({ ...current, [key]: event.target.value }));
+    setFeedback(null);
+  };
+
+  const updateCompanyField = (key) => (event) => {
+    setCompanyForm((current) => ({ ...current, [key]: event.target.value }));
     setFeedback(null);
   };
 
@@ -981,9 +1002,11 @@ function ERPView({
   };
 
   const handleProductInlineChange = (sku, key, value) => {
-    const backendValue = key === 'stock' || key === 'stockMin' || key === 'salePriceBase'
+    const backendValue = ['stock', 'stockMin', 'salePriceBase', 'purchaseCost', 'transportUnit'].includes(key)
       ? Math.max(0, Math.round(asNumber(value, 0)))
-      : value;
+      : key === 'name' || key === 'category' || key === 'barcode' || key === 'brand' || key === 'unit' || key === 'location'
+        ? normalizeText(value)
+        : value;
     productsService.update(sku, { [key]: backendValue });
 
     setProductsFull((current) =>
@@ -994,16 +1017,35 @@ function ERPView({
           return { ...item, [key]: Math.max(0, Math.round(asNumber(value, 0))) };
         }
 
-        if (key === 'salePriceBase') {
+        if (key === 'salePriceBase' || key === 'purchaseCost' || key === 'transportUnit') {
           const salePriceBase = Math.max(0, Math.round(asNumber(value, 0)));
-          const finalCost = Math.max(0, Math.round(asNumber(item.finalCost, 0)));
-          const unitProfit = Math.max(0, salePriceBase - finalCost);
-          const marginPct = salePriceBase > 0 ? unitProfit / salePriceBase : 0;
-          return { ...item, salePriceBase, unitProfit, marginPct };
+          const nextSalePrice = key === 'salePriceBase' ? salePriceBase : Math.max(0, Math.round(asNumber(item.salePriceBase, 0)));
+          const nextPurchaseCost = key === 'purchaseCost' ? Math.max(0, Math.round(asNumber(value, 0))) : Math.max(0, Math.round(asNumber(item.purchaseCost, 0)));
+          const nextTransportUnit = key === 'transportUnit' ? Math.max(0, Math.round(asNumber(value, 0))) : Math.max(0, Math.round(asNumber(item.transportUnit, 0)));
+          const finalCost = nextPurchaseCost + nextTransportUnit;
+          const unitProfit = Math.max(0, nextSalePrice - finalCost);
+          const marginPct = nextSalePrice > 0 ? unitProfit / nextSalePrice : 0;
+          return {
+            ...item,
+            salePriceBase: nextSalePrice,
+            purchaseCost: nextPurchaseCost,
+            transportUnit: nextTransportUnit,
+            finalCost,
+            unitProfit,
+            marginPct,
+          };
         }
 
         if (key === 'status') {
           return { ...item, status: value };
+        }
+
+        if (key === 'name') {
+          return { ...item, name: normalizeText(value), product: normalizeText(value) };
+        }
+
+        if (['category', 'barcode', 'brand', 'unit', 'location', 'supplierId'].includes(key)) {
+          return { ...item, [key]: value };
         }
 
         return item;
@@ -1022,9 +1064,53 @@ function ERPView({
           return { ...item, basePrice: Math.max(0, Math.round(asNumber(value, 0))) };
         }
 
+        if (key === 'name') {
+          return { ...item, name: normalizeText(value) };
+        }
+
+        if (key === 'category') {
+          return { ...item, category: normalizeText(value) };
+        }
+
+        if (key === 'status') {
+          return { ...item, status: value };
+        }
+
+        if (key === 'barcode' || key === 'brand' || key === 'unit' || key === 'location' || key === 'supplierId') {
+          return { ...item, [key]: value };
+        }
+
+        if (key === 'purchaseCost' || key === 'transportUnit') {
+          return { ...item, [key]: Math.max(0, Math.round(asNumber(value, 0))) };
+        }
+
         return item;
       }),
     );
+  };
+
+  const handleDeleteProduct = async (sku) => {
+    const target = productsFull.find((item) => String(item.sku || '') === String(sku));
+    const productName = target?.product || target?.name || sku;
+    const confirmed = window.confirm(`Eliminar producto "${productName}"? Esta accion no se puede deshacer.`);
+    if (!confirmed) return;
+
+    const result = await productsService.remove(sku);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo eliminar producto: ${result.error.message}` });
+      return;
+    }
+
+    setProductsFull((current) => current.filter((item) => String(item.sku || '') !== String(sku)));
+    setProducts((current) => current.filter((item) => String(item.id || item.sku || '') !== String(sku)));
+    setPurchases((current) =>
+      current.map((purchase) => {
+        const purchaseSku = String(purchase.productSku || purchase.sku || '');
+        if (purchaseSku !== String(sku)) return purchase;
+        return { ...purchase, product: '[Producto Eliminado]' };
+      }),
+    );
+    setFeedback({ type: 'success', text: 'Producto eliminado correctamente.' });
   };
 
   const handleClientInlineChange = (id, key, value) => {
@@ -1311,6 +1397,50 @@ function ERPView({
   const handleDeleteCityRate = (id) => {
     cityRatesService.remove(id);
     setCityRates((current) => current.filter((item) => item.id !== id));
+  };
+
+  const handleSaveCompanyInfo = async (event) => {
+    event.preventDefault();
+
+    const payload = {
+      name: normalizeText(companyForm.name),
+      address: normalizeText(companyForm.address),
+      rut: normalizeRut(companyForm.rut),
+      phone: normalizePhone(companyForm.phone),
+      email: normalizeEmail(companyForm.email),
+    };
+
+    if (!payload.name) {
+      setFeedback({ type: 'error', text: 'Debes ingresar el nombre comercial de Thorena.' });
+      return;
+    }
+
+    const rutCheck = validateRutDetailed(payload.rut);
+    if (!rutCheck.valid) {
+      setFeedback({ type: 'error', text: rutCheck.reason === 'format' ? 'Formato de RUT invalido. Usa 12345678-5.' : 'RUT invalido: digito verificador incorrecto.' });
+      return;
+    }
+    if (!validatePhone(payload.phone)) {
+      setFeedback({ type: 'error', text: 'Telefono invalido. Usa formato +56912345678.' });
+      return;
+    }
+    if (!validateEmail(payload.email)) {
+      setFeedback({ type: 'error', text: 'Correo invalido. Ejemplo: contacto@thorena.cl' });
+      return;
+    }
+
+    if (!onSaveCompanyInfo) {
+      setFeedback({ type: 'error', text: 'No se pudo guardar datos de Thorena.' });
+      return;
+    }
+
+    const result = await onSaveCompanyInfo(payload);
+    if (!result.success) {
+      setFeedback({ type: 'error', text: `No se pudo guardar datos de Thorena: ${result.error.message}` });
+      return;
+    }
+
+    setFeedback({ type: 'success', text: 'Datos Thorena actualizados para cotizaciones.' });
   };
 
   const openEditModal = (entity, id, draft) => {
@@ -1970,7 +2100,7 @@ function ERPView({
                       <td>{purchase.supplier || '-'}</td>
                       <td>{purchase.purchaseOrder || '-'}</td>
                       <td>{purchase.sku || '-'}</td>
-                      <td>{purchase.product || '-'}</td>
+                      <td>{purchase.product || '[Producto Eliminado]'}</td>
                       <td>{formatInteger(purchase.quantity || 0)}</td>
                       <td>{formatCurrency(purchase.unitCost || 0)}</td>
                       <td>{formatCurrency(purchase.transportUnit || 0)}</td>
@@ -2197,10 +2327,24 @@ function ERPView({
                       <td className="table-actions-col">
                         <div className="table-actions">
                           <button className="button button-small button-ghost" type="button" onClick={() => openEditModal('product', product.sku, {
-                            stock: String(product.stock ?? 0), stockMin: String(product.stockMin ?? 0), salePriceBase: String(product.salePriceBase ?? 0),
+                            name: product.product || product.name || '',
+                            category: product.category || '',
+                            barcode: product.barcode || '',
+                            brand: product.brand || '',
+                            unit: product.unit || 'Unidad',
+                            supplierId: product.supplierId || '',
+                            purchaseCost: String(product.purchaseCost ?? 0),
+                            transportUnit: String(product.transportUnit ?? 0),
+                            salePriceBase: String(product.salePriceBase ?? 0),
+                            stock: String(product.stock ?? 0),
+                            stockMin: String(product.stockMin ?? 0),
+                            location: product.location || '',
                             status: product.status || 'Activo',
                           })}>
                             Editar
+                          </button>
+                          <button className="button button-small button-danger" type="button" onClick={() => handleDeleteProduct(product.sku)}>
+                            Eliminar
                           </button>
                         </div>
                       </td>
@@ -2473,6 +2617,44 @@ function ERPView({
         </div>
       ) : null}
 
+      {tab === 'datos-thorena' ? (
+        <div className="erp-content-layout erp-content-layout-full">
+          <form className="panel erp-form" onSubmit={handleSaveCompanyInfo}>
+            <div className="panel-title">
+              <h3>Datos Thorena para cotizaciones</h3>
+              <p className="muted">Esta informacion se usa en el PDF de cotizacion que se genera desde Ventas.</p>
+            </div>
+
+            <div className="form-grid">
+              <label className="field field-wide">
+                <span>Nombre comercial</span>
+                <input value={companyForm.name} onChange={updateCompanyField('name')} placeholder="Ej: Thorena Comercial" />
+              </label>
+              <label className="field field-wide">
+                <span>Direccion</span>
+                <input value={companyForm.address} onChange={updateCompanyField('address')} placeholder="Ej: Calle 123, Villarrica" />
+              </label>
+              <label className="field">
+                <span>RUT (12345678-5)</span>
+                <input value={companyForm.rut} onChange={updateCompanyField('rut')} placeholder="12345678-5" />
+              </label>
+              <label className="field">
+                <span>Telefono (+56912345678)</span>
+                <input value={companyForm.phone} onChange={updateCompanyField('phone')} placeholder="+56912345678" />
+              </label>
+              <label className="field field-wide">
+                <span>Correo (contacto@thorena.cl)</span>
+                <input value={companyForm.email} onChange={updateCompanyField('email')} placeholder="contacto@thorena.cl" />
+              </label>
+            </div>
+
+            <button className="button button-primary" type="submit">
+              Guardar datos Thorena
+            </button>
+          </form>
+        </div>
+      ) : null}
+
       {editModal ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Editar registro ERP">
           <div className="panel modal-card">
@@ -2548,9 +2730,18 @@ function ERPView({
 
               {editModal.entity === 'product' ? (
                 <>
+                  <label className="field field-wide"><span>Nombre producto</span><input value={editModal.draft.name || ''} onChange={updateEditDraft('name')} /></label>
+                  <label className="field"><span>Categoria</span><input value={editModal.draft.category || ''} onChange={updateEditDraft('category')} /></label>
+                  <label className="field"><span>Codigo barra</span><input value={editModal.draft.barcode || ''} onChange={updateEditDraft('barcode')} /></label>
+                  <label className="field"><span>Marca</span><input value={editModal.draft.brand || ''} onChange={updateEditDraft('brand')} /></label>
+                  <label className="field"><span>Unidad</span><input value={editModal.draft.unit || ''} onChange={updateEditDraft('unit')} /></label>
+                  <label className="field"><span>Proveedor</span><select value={editModal.draft.supplierId || ''} onChange={updateEditDraft('supplierId')}><option value="">Sin proveedor</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></label>
+                  <label className="field"><span>Costo compra</span><input type="number" min="0" step="1" value={editModal.draft.purchaseCost || 0} onChange={updateEditDraft('purchaseCost')} /></label>
+                  <label className="field"><span>Transporte unidad</span><input type="number" min="0" step="1" value={editModal.draft.transportUnit || 0} onChange={updateEditDraft('transportUnit')} /></label>
                   <label className="field"><span>Stock</span><input type="number" min="0" step="1" value={editModal.draft.stock || 0} onChange={updateEditDraft('stock')} /></label>
                   <label className="field"><span>Stock minimo</span><input type="number" min="0" step="1" value={editModal.draft.stockMin || 0} onChange={updateEditDraft('stockMin')} /></label>
                   <label className="field"><span>Precio base</span><input type="number" min="0" step="1" value={editModal.draft.salePriceBase || 0} onChange={updateEditDraft('salePriceBase')} /></label>
+                  <label className="field"><span>Ubicacion</span><input value={editModal.draft.location || ''} onChange={updateEditDraft('location')} /></label>
                   <label className="field"><span>Estado</span><select value={editModal.draft.status || 'Activo'} onChange={updateEditDraft('status')}>{PRODUCT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
                 </>
               ) : null}

@@ -1,6 +1,6 @@
 import { desc, eq, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
-import { products, purchases, suppliers } from '../db/schema';
+import { orderItems, products, purchases, quoteItems, suppliers } from '../db/schema';
 import { AppError } from '../lib/errors';
 import { normalizeEmail, normalizePhone, normalizeText, normalizeTextKey, validateEmail, validatePhone } from '../lib/normalization';
 import { detailStub } from './base.service';
@@ -219,7 +219,23 @@ export const productsService = {
     return row[0] ? toProduct(row[0]) : null;
   },
   remove: async (id: string) => {
-    await db.delete(products).where(isUuid(id) ? or(eq(products.id, id), eq(products.sku, id)) : eq(products.sku, id));
-    return { deleted: true, id };
+    return db.transaction(async (tx) => {
+      const row = await tx
+        .select({ id: products.id, sku: products.sku })
+        .from(products)
+        .where(isUuid(id) ? or(eq(products.id, id), eq(products.sku, id)) : eq(products.sku, id))
+        .limit(1);
+      const product = row[0];
+      if (!product) {
+        return { deleted: true, id };
+      }
+
+      await tx.update(purchases).set({ productId: null, updatedAt: sql`now()` }).where(eq(purchases.productId, product.id));
+      await tx.update(orderItems).set({ productId: null, updatedAt: sql`now()` }).where(eq(orderItems.productId, product.id));
+      await tx.update(quoteItems).set({ productId: null, updatedAt: sql`now()` }).where(eq(quoteItems.productId, product.id));
+
+      await tx.delete(products).where(eq(products.id, product.id));
+      return { deleted: true, id: product.sku };
+    });
   },
 };
